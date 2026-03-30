@@ -8,6 +8,7 @@ muestras de texto limpio de los archivos EPUB.
 import os
 import sys
 import time
+import random
 import logging
 from pathlib import Path
 
@@ -89,38 +90,41 @@ if __name__ == '__main__':
             sample_text = extract_sample_text(file_path, max_chars=4000)
             
             if sample_text:
-                # 2. Generar mediante la red con manejo de Rate Limits
+                # 2. Generar mediante la red con manejo avanzado de Rate Limits (Exponential Backoff)
                 logger.info(f"Fragmento extraído de {len(sample_text)} caracteres. Llamando a Groq...")
                 
                 summary = ""
                 retries = 0
-                max_retries = 3
+                max_retries = 5  # Aumentamos ligeramente los intentos
+                base_delay = 5   # Tiempo base de espera en segundos
                 
                 while retries < max_retries:
                     try:
                         summary = generate_summary(title, sample_text)
-                        break
+                        break  # Si tiene éxito, salimos del bucle
                     except Exception as e:
                         error_str = str(e).lower()
                         if "429" in error_str or "too many requests" in error_str:
                             retries += 1
-                            logger.warning(f"Rate Limiting por API Groq (429). Esperando 30s. Intento {retries}/{max_retries}...")
-                            time.sleep(30)
+                            # Fórmula de retroceso exponencial con Jitter
+                            delay = (base_delay * (2 ** (retries - 1))) + random.uniform(0, 1)
+                            logger.warning(f"⚠️ Rate Limit de Groq (429). Esperando {delay:.2f}s antes del intento {retries}/{max_retries}...")
+                            time.sleep(delay)
                         else:
-                            logger.error(f"Error desconocido API: {e}")
-                            break
+                            logger.error(f"❌ Error desconocido en API: {e}")
+                            break # Si es otro error, no reintentamos
                             
                 if summary:
                     # 3. Guardar Base de Datos
                     update_book_summary(conn, book_id, summary)
                     logger.info("✅ Resumen generado exitosamente.")
                 else:
-                    logger.warning(f"❌ Falló la generación del resumen final para '{title}'.")
+                    logger.warning(f"❌ Falló la generación del resumen final para '{title}' tras agotar reintentos.")
             else:
                 logger.warning(f"⚠️ No fue posible extraer un fragmento limpio de texto para '{title}'.")
                 
-            # 4. Controlar limites de velocidad 
-            logger.info("Esperando 5 segundos por defecto...")
+            # 4. Controlar limites de velocidad estándar entre libros
+            logger.info("Esperando 5 segundos por cortesía antes del siguiente libro...")
             time.sleep(5)
             
         conn.close()

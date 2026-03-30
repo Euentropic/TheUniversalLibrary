@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import uuid
 import re
+import shutil
 from pathlib import Path
 from typing import Tuple, Optional
 import ebooklib
@@ -19,6 +20,10 @@ from ebooklib import epub
 # Añadimos la raíz del proyecto al sys.path para poder importar src
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
+
+# Directorios de datos
+PROCESADOS_DIR = PROJECT_ROOT / "data" / "Procesados"
+PROCESADOS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Directorio de portadas
 COVERS_DIR = PROJECT_ROOT / "data" / "covers"
@@ -177,6 +182,17 @@ def process_directory(directory_path: str | Path) -> None:
             conn.commit()
             success_count += 1
             logger.info(f"Guardado exitosamente: '{title}' por '{creator}' (Editorial: '{publisher}')")
+            
+            # Mover a carpeta procesados y actualizar ruta en DB
+            try:
+                new_path = PROCESADOS_DIR / file_path.name
+                shutil.move(str(file_path), str(new_path))
+                cursor = conn.cursor()
+                cursor.execute("UPDATE Books SET file_path = ? WHERE id = ?", (str(new_path), book_id))
+                conn.commit()
+                logger.info(f"Archivo movido a procesados: {new_path.name}")
+            except Exception as e:
+                logger.error(f"Fallo al mover archivo a procesados: {e}")
             
         except sqlite3.Error as e:
             # Revertir cambios en caso de error en base de datos
