@@ -271,12 +271,19 @@ def get_all_books_details(conn: sqlite3.Connection):
                 COALESCE(GROUP_CONCAT(DISTINCT a.name), 'Desconocido') AS author_name,
                 COALESCE(GROUP_CONCAT(DISTINCT p.name), 'Desconocido') AS publisher_name,
                 b.cover_path, 
-                b.summary
+                b.summary,
+                ce.reading_order,
+                s.name AS saga_name,
+                s.total_books,
+                u.name AS universe_name
             FROM Books b
             LEFT JOIN Book_Authors ba ON b.id = ba.book_id
             LEFT JOIN Authors a ON ba.author_id = a.id
             LEFT JOIN Book_Publishers bp ON b.id = bp.book_id
             LEFT JOIN Publishers p ON bp.publisher_id = p.id
+            LEFT JOIN catalog_entries ce ON b.catalog_entry_id = ce.id
+            LEFT JOIN sagas s ON ce.saga_id = s.id
+            LEFT JOIN universes u ON s.universe_id = u.id
             GROUP BY b.id
         '''
         cursor.execute(query)

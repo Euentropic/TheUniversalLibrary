@@ -75,7 +75,7 @@ def generate_summary(book_title: str, sample_text: str) -> str:
     )
     return completion.choices[0].message.content.strip()
 
-if __name__ == '__main__':
+def run_summary_pipeline():
     logger.info("Iniciando Pipeline de Generación de Resúmenes mediante IA de Groq...")
     
     conn = get_connection(DB_PATH)
@@ -131,3 +131,6 @@ if __name__ == '__main__':
         logger.info("Pipeline de Resúmenes finalizado.")
     else:
         logger.error("No se pudo conectar a SQLite. Abortando proceso.")
+
+if __name__ == '__main__':
+    run_summary_pipeline()

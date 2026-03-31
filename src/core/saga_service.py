@@ -5,6 +5,10 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Forzamos la recarga del archivo .env ignorando la caché de la terminal
+env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+
 # Ajustar PYTHONPATH para poder importar desde src si se ejecuta como script
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,10 +23,8 @@ from src.db.database_manager import get_connection, DB_PATH
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno (incluye GEMINI_API_KEY)
-env_path = PROJECT_ROOT / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
+# Variables de entorno cargadas previamente con override=True en la cabecera
+
 
 def get_saga_metadata(book_title: str, author: str) -> dict:
     """

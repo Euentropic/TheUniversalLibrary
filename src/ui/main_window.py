@@ -5,16 +5,43 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
+import shutil
+
 # PyQt6 Core y Widgets
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QLabel, QTextEdit, QListWidgetItem, QSplitter
+    QListWidget, QLabel, QTextEdit, QListWidgetItem, QSplitter,
+    QLineEdit, QPushButton
 )
 from PyQt6.QtGui import QPixmap, QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
-# Importamos las dependencias locales de la base de datos
+# Importamos las dependencias locales de la base de datos y backend
 from src.db.database_manager import get_connection, DB_PATH, get_all_books_details
+from src.core.ingestion_engine import process_directory
+from src.core.ai_service import run_summary_pipeline
+from src.core.saga_orchestrator import run_saga_analysis_pipeline
+from src.ui.chat_window import GeminiChatWindow
+
+class IngestionWorker(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal()
+    
+    def __init__(self, target_dir):
+        super().__init__()
+        self.target_dir = target_dir
+        
+    def run(self):
+        self.progress.emit("Ingestando archivos locales...")
+        process_directory(str(self.target_dir))
+        
+        self.progress.emit("Generando resúmenes con IA...")
+        run_summary_pipeline()
+        
+        self.progress.emit("Analizando sagas y universos...")
+        run_saga_analysis_pipeline()
+        
+        self.finished.emit()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -22,6 +49,7 @@ class MainWindow(QMainWindow):
         # Configuración inicial de la ventana
         self.setWindowTitle("The Universal Library - Dashboard")
         self.resize(1000, 600)
+        self.setAcceptDrops(True)
         
         # Aplicamos el tema oscuro global
         self.apply_dark_theme()
@@ -93,14 +121,35 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(self.splitter)
         
-        # 2. Panel Izquierdo: Lista de libros
+        # 2. Panel Izquierdo: Buscador y Lista
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Buscar libro, autor o saga...")
+        self.search_bar.textChanged.connect(self.filter_books)
+        self.search_bar.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 6px;
+                background-color: #252526;
+                color: #d4d4d4;
+                font-size: 11pt;
+            }
+        """)
+        left_layout.addWidget(self.search_bar)
+        
         self.books_list = QListWidget()
         self.books_list.setStyleSheet("font-size: 11pt;")
         
         # Tarea 2: Mejora de la lista (elipse de textos largos)
         self.books_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.books_list.setWordWrap(False)
-        self.splitter.addWidget(self.books_list)
+        left_layout.addWidget(self.books_list)
+        
+        self.splitter.addWidget(left_panel)
         
         # Conectar evento de cambio de selección
         self.books_list.itemSelectionChanged.connect(self.on_book_selected)
@@ -142,12 +191,46 @@ class MainWindow(QMainWindow):
         self.meta_label.setMinimumHeight(25)
         right_layout.addWidget(self.meta_label)
         
+        # Información de Universo y Saga
+        self.saga_label = QLabel("")
+        font_saga = QFont()
+        font_saga.setPointSize(11)
+        font_saga.setItalic(True)
+        self.saga_label.setFont(font_saga)
+        self.saga_label.setStyleSheet("color: #c586c0;") # Color distintivo (estilo VS Code)
+        self.saga_label.setMinimumHeight(25)
+        self.saga_label.hide() # Oculto por defecto
+        right_layout.addWidget(self.saga_label)
+        
         # D) Resumen Inteligente (QTextEdit) - Solo lectura
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
         # Padding interno asignado en duro si la QSS base requiere ayuda
         self.summary_text.setStyleSheet("padding: 12px; font-size: 11pt; line-height: 1.5;")
         right_layout.addWidget(self.summary_text)
+
+        # Botón del Bibliotecario (Esqueleto Chat)
+        self.chat_button = QPushButton("✨ Preguntar a Gemini sobre este libro")
+        self.chat_button.setStyleSheet("""
+            QPushButton {
+                background-color: #5c2d91;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #6d3aab;
+            }
+            QPushButton:disabled {
+                background-color: #3b205e;
+                color: #888888;
+            }
+        """)
+        self.chat_button.setEnabled(False)
+        self.chat_button.clicked.connect(self.open_ai_chat)
+        right_layout.addWidget(self.chat_button)
 
     def load_data(self):
         """Lee los libros de la base de datos y poblamos la lista del panel izquierdo."""
@@ -182,12 +265,25 @@ class MainWindow(QMainWindow):
         # Recuperamos la data inyectada previamente
         book = item.data(Qt.ItemDataRole.UserRole)
         
+        # Habilitar el botón de chat
+        self.chat_button.setEnabled(True)
+        
         # 1. Actualizar Textos
         self.title_label.setText(book.get('title', 'Sin título disponible'))
         
         author = book.get('author_name', 'Desconocido')
         publisher = book.get('publisher_name', 'Desconocido')
         self.meta_label.setText(f"Autor: {author}  |  Editorial: {publisher}")
+        
+        saga_name = book.get('saga_name')
+        if saga_name:
+            universe_name = book.get('universe_name', 'Desconocido')
+            reading_order = book.get('reading_order', '?')
+            total_books = book.get('total_books', '?')
+            self.saga_label.setText(f"🌌 Universo: {universe_name} | 📚 Saga: {saga_name} (Libro {reading_order} de {total_books})")
+            self.saga_label.show()
+        else:
+            self.saga_label.hide()
         
         # 2. Actualizar Resumen
         summary = book.get('summary')
@@ -211,6 +307,74 @@ class MainWindow(QMainWindow):
             self.cover_label.setText("Sin Portada")
             # Estilo fallback
             self.cover_label.setStyleSheet("color: #888; font-size: 14pt; border: 1px dashed #555;")
+
+    def filter_books(self, text):
+        query = text.lower().strip()
+        for i in range(self.books_list.count()):
+            item = self.books_list.item(i)
+            file_data = item.data(Qt.ItemDataRole.UserRole)
+            if file_data:
+                if not query:
+                    item.setHidden(False)
+                    continue
+                    
+                title = file_data.get('title', '').lower()
+                author = file_data.get('author_name', '').lower()
+                saga = file_data.get('saga_name', '')
+                saga = saga.lower() if saga else ''
+                universe = file_data.get('universe_name', '')
+                universe = universe.lower() if universe else ''
+                
+                if query in title or query in author or query in saga or query in universe:
+                    item.setHidden(False)
+                else:
+                    item.setHidden(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        
+        target_dir = PROJECT_ROOT / "data" / "ebooks_test"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        for url in urls:
+            path = Path(url.toLocalFile())
+            if path.is_file():
+                try:
+                    shutil.copy(path, target_dir)
+                except Exception as e:
+                    print(f"Error copiando archivo {path}: {e}")
+                    
+        self.setWindowTitle("Procesando libros, por favor espera...")
+        
+        # Iniciar worker en segundo plano
+        self.worker = IngestionWorker(target_dir)
+        self.worker.progress.connect(lambda msg: self.setWindowTitle(f"Procesando: {msg}"))
+        self.worker.finished.connect(self.on_worker_finished)
+        self.worker.start()
+
+    def on_worker_finished(self):
+        self.setWindowTitle("The Universal Library - Dashboard")
+        self.load_data()
+
+    def open_ai_chat(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        book = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        title = book.get('title', 'Desconocido')
+        author = book.get('author_name', 'Desconocido')
+        summary = book.get('summary', '')
+        
+        # Instanciar la ventana de chat de forma no modal y asegurar la referencia
+        self.chat_win = GeminiChatWindow(title, author, summary, self)
+        self.chat_win.show()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
