@@ -63,7 +63,7 @@ def generate_summary(book_title: str, sample_text: str) -> str:
         messages=[
             {
                 "role": "system",
-                "content": "Eres un bibliotecario experto. A partir del título y el fragmento del libro proporcionado, escribe un resumen atractivo y conciso (máximo 100 palabras) en español sobre la temática del libro."
+                "content": "Eres un bibliotecario experto. A partir del título y el fragmento del libro proporcionado, escribe un resumen atractivo y conciso (máximo 100 palabras) en español sobre la temática del libro. Termina siempre el resumen con un punto final y no cortes el texto a la mitad."
             },
             {
                 "role": "user",
@@ -71,16 +71,26 @@ def generate_summary(book_title: str, sample_text: str) -> str:
             }
         ],
         temperature=0.7,
-        max_tokens=256,
+        max_tokens=1024,
     )
     return completion.choices[0].message.content.strip()
 
-def run_summary_pipeline():
+def run_summary_pipeline(book_ids=None):
     logger.info("Iniciando Pipeline de Generación de Resúmenes mediante IA de Groq...")
     
     conn = get_connection(DB_PATH)
     if conn:
-        books = get_books_without_summary(conn)
+        if book_ids is not None:
+            if not book_ids:
+                logger.info("La lista de libros está vacía. No hay nada que procesar.")
+                return
+            placeholders = ','.join('?' for _ in book_ids)
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT id, title, file_path FROM Books WHERE id IN ({placeholders}) AND (summary IS NULL OR summary = '')", book_ids)
+            books = cursor.fetchall()
+        else:
+            books = get_books_without_summary(conn)
+            
         logger.info(f"Se detectaron {len(books)} libros pendientes de recibir un resumen.")
         
         for book_id, title, file_path in books:

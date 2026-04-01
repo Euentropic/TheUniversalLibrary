@@ -126,10 +126,11 @@ def extract_cover(epub_book: epub.EpubBook, book_title: str) -> Optional[str]:
             
     return None
 
-def process_directory(directory_path: str | Path) -> None:
+def process_directory(directory_path: str | Path) -> list:
     """
     Escanea un directorio buscando archivos .epub, extrae sus metadatos e
     inserta los registros en la base de datos de manera transaccional.
+    Devuelve la lista de los IDs de los libros insertados/procesados.
     """
     directory = Path(directory_path)
     if not directory.exists() or not directory.is_dir():
@@ -141,6 +142,7 @@ def process_directory(directory_path: str | Path) -> None:
 
     success_count = 0
     error_count = 0
+    inserted_book_ids = []
     
     for file_path in epub_files:
         logger.info(f"Procesando: {file_path.name}")
@@ -181,6 +183,7 @@ def process_directory(directory_path: str | Path) -> None:
             # Confirmar transacción si todo sale bien
             conn.commit()
             success_count += 1
+            inserted_book_ids.append(book_id)
             logger.info(f"Guardado exitosamente: '{title}' por '{creator}' (Editorial: '{publisher}')")
             
             # Mover a carpeta procesados y actualizar ruta en DB
@@ -208,6 +211,7 @@ def process_directory(directory_path: str | Path) -> None:
             conn.close()
             
     logger.info(f"Resumen de Ingestión: {success_count} procesados exitosamente, {error_count} errores.")
+    return inserted_book_ids
 
 if __name__ == "__main__":
     # Ejemplo de uso buscando una carpeta temporal o argumento

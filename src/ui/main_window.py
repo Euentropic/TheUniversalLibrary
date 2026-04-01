@@ -11,13 +11,13 @@ import shutil
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QLabel, QTextEdit, QListWidgetItem, QSplitter,
-    QLineEdit, QPushButton
+    QLineEdit, QPushButton, QSizePolicy, QMessageBox
 )
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # Importamos las dependencias locales de la base de datos y backend
-from src.db.database_manager import get_connection, DB_PATH, get_all_books_details
+from src.db.database_manager import get_connection, DB_PATH, get_all_books_details, delete_book
 from src.core.ingestion_engine import process_directory
 from src.core.ai_service import run_summary_pipeline
 from src.core.saga_orchestrator import run_saga_analysis_pipeline
@@ -33,13 +33,13 @@ class IngestionWorker(QThread):
         
     def run(self):
         self.progress.emit("Ingestando archivos locales...")
-        process_directory(str(self.target_dir))
+        book_ids = process_directory(str(self.target_dir))
         
         self.progress.emit("Generando resúmenes con IA...")
-        run_summary_pipeline()
+        run_summary_pipeline(book_ids)
         
         self.progress.emit("Analizando sagas y universos...")
-        run_saga_analysis_pipeline()
+        run_saga_analysis_pipeline(book_ids)
         
         self.finished.emit()
 
@@ -205,6 +205,9 @@ class MainWindow(QMainWindow):
         # D) Resumen Inteligente (QTextEdit) - Solo lectura
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
+        self.summary_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.summary_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.summary_text.setMinimumHeight(150)
         # Padding interno asignado en duro si la QSS base requiere ayuda
         self.summary_text.setStyleSheet("padding: 12px; font-size: 11pt; line-height: 1.5;")
         right_layout.addWidget(self.summary_text)
@@ -231,6 +234,29 @@ class MainWindow(QMainWindow):
         self.chat_button.setEnabled(False)
         self.chat_button.clicked.connect(self.open_ai_chat)
         right_layout.addWidget(self.chat_button)
+
+        # Botón de Borrado
+        self.delete_button = QPushButton("🗑️ Borrar Libro de la Biblioteca")
+        self.delete_button.setStyleSheet("""
+            QPushButton {
+                background-color: #a51d2d;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c1272d;
+            }
+            QPushButton:disabled {
+                background-color: #5c1b22;
+                color: #888888;
+            }
+        """)
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self.delete_selected_book)
+        right_layout.addWidget(self.delete_button)
 
     def load_data(self):
         """Lee los libros de la base de datos y poblamos la lista del panel izquierdo."""
@@ -265,8 +291,9 @@ class MainWindow(QMainWindow):
         # Recuperamos la data inyectada previamente
         book = item.data(Qt.ItemDataRole.UserRole)
         
-        # Habilitar el botón de chat
+        # Habilitar el botón de chat y borrar
         self.chat_button.setEnabled(True)
+        self.delete_button.setEnabled(True)
         
         # 1. Actualizar Textos
         self.title_label.setText(book.get('title', 'Sin título disponible'))
@@ -375,6 +402,42 @@ class MainWindow(QMainWindow):
         # Instanciar la ventana de chat de forma no modal y asegurar la referencia
         self.chat_win = GeminiChatWindow(title, author, summary, self)
         self.chat_win.show()
+
+    def delete_selected_book(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        book = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        book_id = book.get('id')
+        title = book.get('title', 'Desconocido')
+        
+        reply = QMessageBox.question(
+            self, 'Confirmar borrado', 
+            f"¿Estás seguro de que deseas eliminar '{title}'?\\nDeberás volver a arrastrarlo para procesarlo.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            conn = get_connection(DB_PATH)
+            if conn:
+                delete_book(conn, book_id)
+                conn.close()
+                
+                # Mensaje temporal en el título
+                self.setWindowTitle(f"Libro eliminado: {title}")
+                
+                # Limpiar panel derecho
+                self.title_label.setText("")
+                self.meta_label.setText("")
+                self.saga_label.setText("")
+                self.summary_text.setPlainText("")
+                self.cover_label.clear()
+                self.chat_button.setEnabled(False)
+                self.delete_button.setEnabled(False)
+                
+                self.load_data()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

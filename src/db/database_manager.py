@@ -237,6 +237,16 @@ def link_book_publisher(conn: sqlite3.Connection, book_id: int, publisher_id: in
     except sqlite3.Error as e:
         logger.error(f"Error al vincular libro y editorial: {e}")
 
+def delete_book(conn: sqlite3.Connection, book_id: int):
+    """Elimina un libro de la base de datos por su ID."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM Books WHERE id = ?", (book_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error al eliminar el libro {book_id}: {e}")
+        conn.rollback()
+
 def get_books_without_summary(conn: sqlite3.Connection):
     """Devuelve una lista de tuplas (id, title, file_path) de libros sin resumen."""
     try:

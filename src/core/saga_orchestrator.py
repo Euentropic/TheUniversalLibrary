@@ -9,7 +9,7 @@ from src.db.saga_db_manager import save_saga_metadata
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def run_saga_analysis_pipeline():
+def run_saga_analysis_pipeline(book_ids=None):
     conn = get_connection(DB_PATH)
     if not conn:
         logger.error("No se pudo conectar a la base de datos.")
@@ -17,19 +17,38 @@ def run_saga_analysis_pipeline():
 
     try:
         cursor = conn.cursor()
-        # Obtener los libros que aún no han sido analizados (cuyo catalog_entry_id es NULL)
-        query = '''
-            SELECT 
-                b.id, 
-                b.title, 
-                COALESCE(GROUP_CONCAT(DISTINCT a.name), 'Desconocido') AS author_name
-            FROM Books b
-            LEFT JOIN Book_Authors ba ON b.id = ba.book_id
-            LEFT JOIN Authors a ON ba.author_id = a.id
-            WHERE b.catalog_entry_id IS NULL
-            GROUP BY b.id
-        '''
-        cursor.execute(query)
+        
+        if book_ids is not None:
+            if not book_ids:
+                logger.info("La lista de libros está vacía. No hay nada que analizar.")
+                return
+            placeholders = ','.join('?' for _ in book_ids)
+            query = f'''
+                SELECT 
+                    b.id, 
+                    b.title, 
+                    COALESCE(GROUP_CONCAT(DISTINCT a.name), 'Desconocido') AS author_name
+                FROM Books b
+                LEFT JOIN Book_Authors ba ON b.id = ba.book_id
+                LEFT JOIN Authors a ON ba.author_id = a.id
+                WHERE b.id IN ({placeholders}) AND b.catalog_entry_id IS NULL
+                GROUP BY b.id
+            '''
+            cursor.execute(query, book_ids)
+        else:
+            query = '''
+                SELECT 
+                    b.id, 
+                    b.title, 
+                    COALESCE(GROUP_CONCAT(DISTINCT a.name), 'Desconocido') AS author_name
+                FROM Books b
+                LEFT JOIN Book_Authors ba ON b.id = ba.book_id
+                LEFT JOIN Authors a ON ba.author_id = a.id
+                WHERE b.catalog_entry_id IS NULL
+                GROUP BY b.id
+            '''
+            cursor.execute(query)
+            
         books_to_analyze = cursor.fetchall()
 
         if not books_to_analyze:
@@ -44,10 +63,12 @@ def run_saga_analysis_pipeline():
                 
                 if saga_json:
                     save_saga_metadata(conn, book_id, title, saga_json)
+                    if not saga_json.get('saga_name'):
+                        logger.info(f"El libro '{title}' ha sido marcado como autoconclusivo.")
                 else:
                     logger.warning(f"La API de Gemini no devolvió un JSON válido para '{title}'.")
             except Exception as e:
-                logger.error(f"Error al procesar el libro '{title}': {e}")
+                logger.error(f"Error al procesar metadatos de saga para '{title}': {e}")
             
             # Añadir un sleep de 3 segundos para respetar los rate-limits de la API de Gemini
             time.sleep(3)

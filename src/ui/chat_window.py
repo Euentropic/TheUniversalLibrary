@@ -1,9 +1,46 @@
 import sys
+import os
+from dotenv import load_dotenv
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, 
     QLineEdit, QPushButton
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+
+from google import genai
+from google.genai import types
+
+load_dotenv(override=True)
+
+class GeminiWorker(QThread):
+    response_ready = pyqtSignal(str)
+
+    def __init__(self, user_prompt, book_title, book_author, book_summary):
+        super().__init__()
+        self.user_prompt = user_prompt
+        self.book_title = book_title
+        self.book_author = book_author
+        self.book_summary = book_summary
+
+    def run(self):
+        try:
+            client = genai.Client()
+            config = types.GenerateContentConfig(
+                system_instruction="Eres un bibliotecario experto. Responde a las dudas del usuario basándote en el libro proporcionado. Sé conciso y analítico."
+            )
+            contents = f"Libro: {self.book_title} de {self.book_author}. Resumen: {self.book_summary}. Pregunta del usuario: {self.user_prompt}"
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=contents,
+                config=config,
+            )
+            
+            self.response_ready.emit(response.text)
+        except Exception as e:
+            self.response_ready.emit(f"Error en Gemini: {str(e)}")
+
 
 class GeminiChatWindow(QDialog):
     def __init__(self, book_title: str, book_author: str, book_summary: str, parent=None):
@@ -32,7 +69,7 @@ class GeminiChatWindow(QDialog):
         self.chat_history.setStyleSheet("background-color: #2d2d2d; color: #d4d4d4; font-size: 11pt; padding: 10px; border-radius: 5px; border: 1px solid #3e3e42;")
         
         # Contexto Inicial
-        self.chat_history.append(f"<i>Hola, soy tu bibliotecario virtual. Pregúntame lo que quieras sobre el libro '{self.book_title}' de {self.book_author}.</i>\\n")
+        self.chat_history.append(f"<i>Hola, soy tu bibliotecario virtual. Pregúntame lo que quieras sobre el libro '{self.book_title}' de {self.book_author}.</i>")
         layout.addWidget(self.chat_history)
         
         # Input Layout
@@ -70,8 +107,20 @@ class GeminiChatWindow(QDialog):
         self.chat_history.append(f"<b style='color: #9cdcfe;'>Tú:</b> {text}")
         self.input_field.clear()
         
-        # Dummy message hasta que integremos la API de Gemini
-        self.chat_history.append("<b style='color: #c586c0;'>Gemini:</b> <i>Enviando consulta a Gemini...</i>\\n")
+        self.send_btn.setEnabled(False)
+        self.input_field.setEnabled(False)
+        
+        self.chat_history.append("<b style='color: #c586c0;'>Gemini:</b> <i>Analizando tu consulta...</i>")
+        
+        self.worker = GeminiWorker(text, self.book_title, self.book_author, self.book_summary)
+        self.worker.response_ready.connect(self.on_gemini_response)
+        self.worker.start()
+
+    def on_gemini_response(self, text):
+        self.chat_history.append(f"<b style='color: #c586c0;'>Gemini:</b> {text}")
+        self.send_btn.setEnabled(True)
+        self.input_field.setEnabled(True)
+        self.input_field.setFocus()
         
     def toggle_expand(self):
         if not self.is_expanded:
