@@ -6,22 +6,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 import shutil
+import unicodedata
+
+def remove_accents(input_str):
+    if not input_str: return ""
+    return unicodedata.normalize('NFKD', str(input_str)).encode('ASCII', 'ignore').decode('utf-8').lower()
 
 # PyQt6 Core y Widgets
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QLabel, QTextEdit, QListWidgetItem, QSplitter,
-    QLineEdit, QPushButton, QSizePolicy, QMessageBox
+    QLineEdit, QPushButton, QSizePolicy, QMessageBox, QComboBox
 )
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # Importamos las dependencias locales de la base de datos y backend
-from src.db.database_manager import get_connection, DB_PATH, get_all_books_details, delete_book
+from src.db.database_manager import get_connection, DB_PATH, get_all_books_details, delete_book, get_all_categories
 from src.core.ingestion_engine import process_directory
 from src.core.ai_service import run_summary_pipeline
 from src.core.saga_orchestrator import run_saga_analysis_pipeline
 from src.ui.chat_window import GeminiChatWindow
+from src.ui.edit_metadata_dialog import EditMetadataDialog
+from PyQt6.QtWidgets import QDialog
 
 class IngestionWorker(QThread):
     progress = pyqtSignal(str)
@@ -126,6 +133,8 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
+        search_layout = QHBoxLayout()
+        
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("Buscar libro, autor o saga...")
         self.search_bar.textChanged.connect(self.filter_books)
@@ -139,7 +148,23 @@ class MainWindow(QMainWindow):
                 font-size: 11pt;
             }
         """)
-        left_layout.addWidget(self.search_bar)
+        search_layout.addWidget(self.search_bar)
+        
+        self.category_filter = QComboBox()
+        self.category_filter.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 6px;
+                background-color: #252526;
+                color: #d4d4d4;
+                font-size: 11pt;
+            }
+        """)
+        self.category_filter.currentTextChanged.connect(self.filter_books)
+        search_layout.addWidget(self.category_filter)
+        
+        left_layout.addLayout(search_layout)
         
         self.books_list = QListWidget()
         self.books_list.setStyleSheet("font-size: 11pt;")
@@ -202,6 +227,16 @@ class MainWindow(QMainWindow):
         self.saga_label.hide() # Oculto por defecto
         right_layout.addWidget(self.saga_label)
         
+        # Información de Categorías
+        self.categories_label = QLabel("")
+        font_cat = QFont()
+        font_cat.setPointSize(10)
+        font_cat.setItalic(True)
+        self.categories_label.setFont(font_cat)
+        self.categories_label.setStyleSheet("color: #8a8a8a;")
+        self.categories_label.hide()
+        right_layout.addWidget(self.categories_label)
+        
         # D) Resumen Inteligente (QTextEdit) - Solo lectura
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
@@ -235,6 +270,29 @@ class MainWindow(QMainWindow):
         self.chat_button.clicked.connect(self.open_ai_chat)
         right_layout.addWidget(self.chat_button)
 
+        # Botón de Edición
+        self.edit_button = QPushButton("✏️ Editar Metadatos")
+        self.edit_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0e639c;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1177bb;
+            }
+            QPushButton:disabled {
+                background-color: #2d2d30;
+                color: #888888;
+            }
+        """)
+        self.edit_button.setEnabled(False)
+        self.edit_button.clicked.connect(self.open_edit_metadata)
+        right_layout.addWidget(self.edit_button)
+
         # Botón de Borrado
         self.delete_button = QPushButton("🗑️ Borrar Libro de la Biblioteca")
         self.delete_button.setStyleSheet("""
@@ -266,7 +324,14 @@ class MainWindow(QMainWindow):
             return
             
         books = get_all_books_details(conn)
+        categories = get_all_categories(conn)
         conn.close()
+        
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        self.category_filter.addItem("Todas las categorías")
+        self.category_filter.addItems(categories)
+        self.category_filter.blockSignals(False)
         
         self.books_list.clear() # Limpiar lista
         
@@ -294,6 +359,7 @@ class MainWindow(QMainWindow):
         # Habilitar el botón de chat y borrar
         self.chat_button.setEnabled(True)
         self.delete_button.setEnabled(True)
+        self.edit_button.setEnabled(True)
         
         # 1. Actualizar Textos
         self.title_label.setText(book.get('title', 'Sin título disponible'))
@@ -311,6 +377,13 @@ class MainWindow(QMainWindow):
             self.saga_label.show()
         else:
             self.saga_label.hide()
+            
+        categories = book.get('categories')
+        if categories:
+            self.categories_label.setText(f"🏷️ Categorías: {categories}")
+            self.categories_label.show()
+        else:
+            self.categories_label.hide()
         
         # 2. Actualizar Resumen
         summary = book.get('summary')
@@ -335,24 +408,30 @@ class MainWindow(QMainWindow):
             # Estilo fallback
             self.cover_label.setStyleSheet("color: #888; font-size: 14pt; border: 1px dashed #555;")
 
-    def filter_books(self, text):
-        query = text.lower().strip()
+    def filter_books(self, text=None):
+        query = remove_accents(self.search_bar.text()).strip()
+        selected_category = self.category_filter.currentText()
+        
         for i in range(self.books_list.count()):
             item = self.books_list.item(i)
             file_data = item.data(Qt.ItemDataRole.UserRole)
             if file_data:
-                if not query:
-                    item.setHidden(False)
-                    continue
-                    
-                title = file_data.get('title', '').lower()
-                author = file_data.get('author_name', '').lower()
-                saga = file_data.get('saga_name', '')
-                saga = saga.lower() if saga else ''
-                universe = file_data.get('universe_name', '')
-                universe = universe.lower() if universe else ''
+                title = remove_accents(file_data.get('title', ''))
+                author = remove_accents(file_data.get('author_name', ''))
+                saga = remove_accents(file_data.get('saga_name', ''))
+                universe = remove_accents(file_data.get('universe_name', ''))
                 
-                if query in title or query in author or query in saga or query in universe:
+                text_match = not query or (query in title or query in author or query in saga or query in universe)
+                
+                cat_match = True
+                if selected_category != "Todas las categorías":
+                    book_cats = file_data.get('categories')
+                    if not book_cats:
+                        cat_match = False
+                    else:
+                        cat_match = selected_category in book_cats
+                        
+                if text_match and cat_match:
                     item.setHidden(False)
                 else:
                     item.setHidden(True)
@@ -403,6 +482,26 @@ class MainWindow(QMainWindow):
         self.chat_win = GeminiChatWindow(title, author, summary, self)
         self.chat_win.show()
 
+    def open_edit_metadata(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        book = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        book_id = book.get('id')
+        
+        dialog = EditMetadataDialog(book, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.load_data()
+            
+            # Re-seleccionar el libro editado para actualizar el panel derecho
+            for i in range(self.books_list.count()):
+                item = self.books_list.item(i)
+                item_data = item.data(Qt.ItemDataRole.UserRole)
+                if item_data and item_data.get('id') == book_id:
+                    self.books_list.setCurrentItem(item)
+                    break
+
     def delete_selected_book(self):
         selected_items = self.books_list.selectedItems()
         if not selected_items:
@@ -432,10 +531,12 @@ class MainWindow(QMainWindow):
                 self.title_label.setText("")
                 self.meta_label.setText("")
                 self.saga_label.setText("")
+                self.categories_label.setText("")
                 self.summary_text.setPlainText("")
                 self.cover_label.clear()
                 self.chat_button.setEnabled(False)
                 self.delete_button.setEnabled(False)
+                self.edit_button.setEnabled(False)
                 
                 self.load_data()
 

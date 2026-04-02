@@ -7,6 +7,7 @@ de forma segura usando el Database Manager.
 """
 
 import sys
+import os
 import logging
 import sqlite3
 import uuid
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Tuple, Optional
 import ebooklib
 from ebooklib import epub
+import fitz
 
 # Añadimos la raíz del proyecto al sys.path para poder importar src
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -126,6 +128,36 @@ def extract_cover(epub_book: epub.EpubBook, book_title: str) -> Optional[str]:
             
     return None
 
+def extract_pdf_metadata(file_path: Path):
+    doc = fitz.open(str(file_path))
+    metadata = doc.metadata
+    
+    title = metadata.get('title')
+    if not title:
+        title = file_path.stem
+        
+    author = metadata.get('author')
+    if not author:
+        author = "Desconocido"
+        
+    text_chunks = []
+    current_len = 0
+    pages_to_read = min(10, len(doc))
+    for i in range(pages_to_read):
+        page_text = doc[i].get_text()
+        if page_text:
+            text_chunks.append(page_text)
+            current_len += len(page_text)
+        if current_len >= 4000:
+            break
+            
+    doc.close()
+    
+    # Unir texto y limitar a 4000 caracteres
+    text = " ".join(text_chunks)[:4000]
+    
+    return title, author, text
+
 def process_directory(directory_path: str | Path) -> list:
     """
     Escanea un directorio buscando archivos .epub, extrae sus metadatos e
@@ -138,21 +170,28 @@ def process_directory(directory_path: str | Path) -> list:
         return
 
     epub_files = list(directory.rglob('*.epub'))
-    logger.info(f"Encontrados {len(epub_files)} archivos .epub en {directory}")
+    pdf_files = list(directory.rglob('*.pdf'))
+    all_files = epub_files + pdf_files
+    logger.info(f"Encontrados {len(all_files)} archivos ({len(epub_files)} epub, {len(pdf_files)} pdf) en {directory}")
 
     success_count = 0
     error_count = 0
     inserted_book_ids = []
     
-    for file_path in epub_files:
+    for file_path in all_files:
         logger.info(f"Procesando: {file_path.name}")
         
-        # Extraer metadatos
-        title, creator, publisher, book = extract_epub_metadata(file_path)
-        format_str = "epub"
-        
-        # Extraer portada
-        cover_path = extract_cover(book, title) if book else None
+        file_ext = file_path.suffix.lower()
+        if file_ext == '.epub':
+            title, creator, publisher, book = extract_epub_metadata(file_path)
+            format_str = "epub"
+        elif file_ext == '.pdf':
+            title, creator, text = extract_pdf_metadata(file_path)
+            publisher = "Desconocido"
+            book = None
+            format_str = "pdf"
+        else:
+            continue
         
         # Conectar a la base de datos para insertar
         conn = get_connection(DB_PATH)
@@ -162,8 +201,33 @@ def process_directory(directory_path: str | Path) -> list:
             continue
             
         try:
-            # Insertar libro
-            book_id = insert_book(conn, title, str(file_path), format_str, cover_path)
+            # 1. Bloqueo Absoluto de Duplicados
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM Books WHERE title = ?", (title,))
+            if cursor.fetchone():
+                logger.warning(f"El libro '{title}' ya existe. Ignorando archivo.")
+                try:
+                    os.remove(str(file_path))
+                except OSError as e:
+                    logger.error(f"Error borrando archivo duplicado: {e}")
+                continue
+                
+            # Extraer portada (ahora solo si el libro es nuevo)
+            cover_path = extract_cover(book, title) if book else None
+            
+            # 2. Cálculo de Rutas
+            destination_path = PROCESADOS_DIR / file_path.name
+            
+            # 3. Movimiento Físico
+            try:
+                shutil.move(str(file_path), str(destination_path))
+            except shutil.Error:
+                # Si falla porque ya existía el archivo con el mismo nombre en destino
+                shutil.copy(str(file_path), str(destination_path))
+                os.remove(str(file_path))
+                
+            # 4. Inserción Atómica en BD
+            book_id = insert_book(conn, title, str(destination_path), format_str, cover_path)
             
             if book_id is None:
                 raise Exception("Fallo al insertar o recuperar el ID del libro.")
@@ -184,18 +248,7 @@ def process_directory(directory_path: str | Path) -> list:
             conn.commit()
             success_count += 1
             inserted_book_ids.append(book_id)
-            logger.info(f"Guardado exitosamente: '{title}' por '{creator}' (Editorial: '{publisher}')")
-            
-            # Mover a carpeta procesados y actualizar ruta en DB
-            try:
-                new_path = PROCESADOS_DIR / file_path.name
-                shutil.move(str(file_path), str(new_path))
-                cursor = conn.cursor()
-                cursor.execute("UPDATE Books SET file_path = ? WHERE id = ?", (str(new_path), book_id))
-                conn.commit()
-                logger.info(f"Archivo movido a procesados: {new_path.name}")
-            except Exception as e:
-                logger.error(f"Fallo al mover archivo a procesados: {e}")
+            logger.info(f"Guardado exitosamente y movido a procesados: '{title}' por '{creator}' (Editorial: '{publisher}')")
             
         except sqlite3.Error as e:
             # Revertir cambios en caso de error en base de datos

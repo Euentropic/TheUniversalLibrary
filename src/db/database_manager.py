@@ -83,7 +83,7 @@ def initialize_db(db_path: Path = DB_PATH) -> None:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS Categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
+                name TEXT UNIQUE COLLATE NOCASE
             )
         ''')
 
@@ -267,6 +267,37 @@ def update_book_summary(conn: sqlite3.Connection, book_id: int, summary_text: st
         logger.error(f"Error al actualizar el resumen del libro {book_id}: {e}")
         conn.rollback()
 
+def save_book_categories(conn: sqlite3.Connection, book_id: int, category_list: list):
+    """Guarda una lista de categorías para un libro."""
+    if not category_list:
+        return
+    try:
+        cursor = conn.cursor()
+        for cat in category_list:
+            cat_name = str(cat).strip()
+            if not cat_name:
+                continue
+            cursor.execute("INSERT OR IGNORE INTO Categories (name) VALUES (?)", (cat_name,))
+            cursor.execute("SELECT id FROM Categories WHERE name = ?", (cat_name,))
+            row = cursor.fetchone()
+            if row:
+                cat_id = row[0]
+                cursor.execute("INSERT OR IGNORE INTO Book_Categories (book_id, category_id) VALUES (?, ?)", (book_id, cat_id))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error al guardar categorías para el libro {book_id}: {e}")
+        conn.rollback()
+
+def get_all_categories(conn: sqlite3.Connection):
+    """Devuelve una lista de nombres de categoría ordenados."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM Categories ORDER BY name ASC")
+        return [row[0] for row in cursor.fetchall()]
+    except sqlite3.Error as e:
+        logger.error(f"Error al obtener categorías: {e}")
+        return []
+
 def get_all_books_details(conn: sqlite3.Connection):
     """
     Devuelve todos los detalles de los libros haciendo JOIN
@@ -285,7 +316,8 @@ def get_all_books_details(conn: sqlite3.Connection):
                 ce.reading_order,
                 s.name AS saga_name,
                 s.total_books,
-                u.name AS universe_name
+                u.name AS universe_name,
+                GROUP_CONCAT(DISTINCT c.name) AS categories
             FROM Books b
             LEFT JOIN Book_Authors ba ON b.id = ba.book_id
             LEFT JOIN Authors a ON ba.author_id = a.id
@@ -294,6 +326,8 @@ def get_all_books_details(conn: sqlite3.Connection):
             LEFT JOIN catalog_entries ce ON b.catalog_entry_id = ce.id
             LEFT JOIN sagas s ON ce.saga_id = s.id
             LEFT JOIN universes u ON s.universe_id = u.id
+            LEFT JOIN Book_Categories bc ON b.id = bc.book_id
+            LEFT JOIN Categories c ON bc.category_id = c.id
             GROUP BY b.id
         '''
         cursor.execute(query)

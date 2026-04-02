@@ -10,6 +10,7 @@ import sys
 import time
 import random
 import logging
+import json
 from pathlib import Path
 
 # Añadimos la raíz del proyecto al sys.path para poder importar src desde cualquier parte
@@ -25,7 +26,8 @@ from src.db.database_manager import (
     get_connection, 
     DB_PATH, 
     get_books_without_summary, 
-    update_book_summary
+    update_book_summary,
+    save_book_categories
 )
 from src.core.text_extractor import extract_sample_text
 
@@ -63,7 +65,7 @@ def generate_summary(book_title: str, sample_text: str) -> str:
         messages=[
             {
                 "role": "system",
-                "content": "Eres un bibliotecario experto. A partir del título y el fragmento del libro proporcionado, escribe un resumen atractivo y conciso (máximo 100 palabras) en español sobre la temática del libro. Termina siempre el resumen con un punto final y no cortes el texto a la mitad."
+                "content": "Eres un bibliotecario experto. Analiza el fragmento y devuelve ÚNICAMENTE un objeto JSON válido con dos claves: 'summary' (un resumen detallado y con punto final) y 'categories' (una lista de 2 a 4 géneros literarios o temáticas, ej: ['Ciencia Ficción', 'Aventura']). No incluyas texto fuera del JSON."
             },
             {
                 "role": "user",
@@ -72,6 +74,7 @@ def generate_summary(book_title: str, sample_text: str) -> str:
         ],
         temperature=0.7,
         max_tokens=1024,
+        response_format={"type": "json_object"},
     )
     return completion.choices[0].message.content.strip()
 
@@ -104,13 +107,17 @@ def run_summary_pipeline(book_ids=None):
                 logger.info(f"Fragmento extraído de {len(sample_text)} caracteres. Llamando a Groq...")
                 
                 summary = ""
+                categories = []
                 retries = 0
                 max_retries = 5  # Aumentamos ligeramente los intentos
                 base_delay = 5   # Tiempo base de espera en segundos
                 
                 while retries < max_retries:
                     try:
-                        summary = generate_summary(title, sample_text)
+                        raw_json = generate_summary(title, sample_text)
+                        parsed = json.loads(raw_json)
+                        summary = parsed.get("summary", "")
+                        categories = parsed.get("categories", [])
                         break  # Si tiene éxito, salimos del bucle
                     except Exception as e:
                         error_str = str(e).lower()
@@ -121,13 +128,15 @@ def run_summary_pipeline(book_ids=None):
                             logger.warning(f"⚠️ Rate Limit de Groq (429). Esperando {delay:.2f}s antes del intento {retries}/{max_retries}...")
                             time.sleep(delay)
                         else:
-                            logger.error(f"❌ Error desconocido en API: {e}")
+                            logger.error(f"❌ Error desconocido en API al generar JSON: {e}")
                             break # Si es otro error, no reintentamos
                             
                 if summary:
                     # 3. Guardar Base de Datos
                     update_book_summary(conn, book_id, summary)
-                    logger.info("✅ Resumen generado exitosamente.")
+                    if categories:
+                        save_book_categories(conn, book_id, categories)
+                    logger.info("✅ Resumen y categorías generadas exitosamente.")
                 else:
                     logger.warning(f"❌ Falló la generación del resumen final para '{title}' tras agotar reintentos.")
             else:
