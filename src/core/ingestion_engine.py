@@ -128,6 +128,21 @@ def extract_cover(epub_book: epub.EpubBook, book_title: str) -> Optional[str]:
             
     return None
 
+def extract_comic_metadata(file_path: Path):
+    """
+    Extrae metadata básica para cómics (.cbz, .cbr o .pdf designados como cómic).
+    """
+    title = file_path.stem
+    if title.lower().endswith('.pdf'):
+        title = title[:-4]
+    
+    # Limpieza de título
+    title = title.replace('_', ' ').replace('-', ' ').replace('.', ' ').strip()
+    
+    author = "Desconocido"
+    text = None  # Devolvemos None en el contenido de texto explícitamente
+    return title, author, text
+
 def extract_pdf_metadata(file_path: Path):
     doc = fitz.open(str(file_path))
     metadata = doc.metadata
@@ -171,8 +186,12 @@ def process_directory(directory_path: str | Path) -> list:
 
     epub_files = list(directory.rglob('*.epub'))
     pdf_files = list(directory.rglob('*.pdf'))
-    all_files = epub_files + pdf_files
-    logger.info(f"Encontrados {len(all_files)} archivos ({len(epub_files)} epub, {len(pdf_files)} pdf) en {directory}")
+    cbz_files = list(directory.rglob('*.cbz'))
+    cbr_files = list(directory.rglob('*.cbr'))
+    pdf_comic_files = list(directory.rglob('*.pdf_comic'))
+    
+    all_files = epub_files + pdf_files + cbz_files + cbr_files + pdf_comic_files
+    logger.info(f"Encontrados {len(all_files)} archivos ({len(epub_files)} epub, {len(pdf_files)} pdf, {len(cbz_files)+len(cbr_files)} cbz/cbr, {len(pdf_comic_files)} pdf_comic) en {directory}")
 
     success_count = 0
     error_count = 0
@@ -190,6 +209,11 @@ def process_directory(directory_path: str | Path) -> list:
             publisher = "Desconocido"
             book = None
             format_str = "pdf"
+        elif file_ext in ['.cbz', '.cbr', '.pdf_comic']:
+            title, creator, text = extract_comic_metadata(file_path)
+            publisher = "Desconocido"
+            book = None
+            format_str = file_ext.strip('.')
         else:
             continue
         
@@ -216,7 +240,10 @@ def process_directory(directory_path: str | Path) -> list:
             cover_path = extract_cover(book, title) if book else None
             
             # 2. Cálculo de Rutas
-            destination_path = PROCESADOS_DIR / file_path.name
+            if file_ext == '.pdf_comic':
+                destination_path = PROCESADOS_DIR / file_path.with_suffix('.pdf').name
+            else:
+                destination_path = PROCESADOS_DIR / file_path.name
             
             # 3. Movimiento Físico
             try:

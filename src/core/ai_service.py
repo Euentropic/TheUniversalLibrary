@@ -20,6 +20,7 @@ sys.path.append(str(PROJECT_ROOT))
 # Importamos dependencias externas
 from dotenv import load_dotenv
 from groq import Groq
+from google import genai
 
 # Importaciones del proyecto
 from src.db.database_manager import (
@@ -50,6 +51,29 @@ try:
 except Exception as e:
     logger.error("No se pudo inicializar el cliente de Groq. ¿Está configurado GROQ_API_KEY?")
     client = None
+
+# Instanciar cliente de Gemini
+try:
+    gemini_client = genai.Client() # Usa GEMINI_API_KEY del .env
+except Exception as e:
+    logger.error(f"No se pudo inicializar Gemini: {e}")
+    gemini_client = None
+
+def generate_comic_metadata_with_gemini(title: str) -> str:
+    """Llama a Gemini para obtener metadata de un cómic solo con el título."""
+    if not gemini_client:
+        return ""
+    
+    prompt = f"Eres un experto en cómics. Identifica este cómic por su título: '{title}'. Devuelve ÚNICAMENTE un JSON con 'summary' (resumen de 4 líneas) y 'categories' (lista de 2 a 4 géneros). No incluyas nada fuera del JSON."
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-pro",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"Error generando en Gemini: {e}")
+        return ""
 
 def generate_summary(book_title: str, sample_text: str) -> str:
     """
@@ -102,7 +126,43 @@ def run_summary_pipeline(book_ids=None):
             # 1. Extraer Muestra Plana
             sample_text = extract_sample_text(file_path, max_chars=4000)
             
-            if sample_text:
+            if file_path.endswith(('.cbz', '.cbr')) or not sample_text:
+                logger.info(f"El archivo es un cómic o no tiene texto. Usando Gemini para '{title}'...")
+                
+                summary = ""
+                categories = []
+                retries = 0
+                max_retries = 3
+                
+                while retries < max_retries:
+                    try:
+                        raw_json = generate_comic_metadata_with_gemini(title)
+                        
+                        # Limpiar bloques markdown si Gemini los ha incluido
+                        if raw_json.startswith('```'):
+                            raw_json = raw_json.split('```')[1]
+                            if raw_json.startswith('json'):
+                                raw_json = raw_json[4:]
+                            raw_json = raw_json.strip()
+                            
+                        parsed = json.loads(raw_json)
+                        summary = parsed.get("summary", "")
+                        categories = parsed.get("categories", [])
+                        break
+                    except Exception as e:
+                        retries += 1
+                        logger.warning(f"Error parseando JSON de Gemini, reintento {retries}/{max_retries}: {e}")
+                        time.sleep(2)
+                        
+                if summary:
+                    update_book_summary(conn, book_id, summary)
+                    if categories:
+                        save_book_categories(conn, book_id, categories)
+                    logger.info("✅ Resumen de cómic y categorías generadas exitosamente mediante Gemini.")
+                else:
+                    logger.warning(f"❌ Falló la generación por Gemini para '{title}'.")
+                    
+            elif sample_text:
                 # 2. Generar mediante la red con manejo avanzado de Rate Limits (Exponential Backoff)
                 logger.info(f"Fragmento extraído de {len(sample_text)} caracteres. Llamando a Groq...")
                 
@@ -136,11 +196,9 @@ def run_summary_pipeline(book_ids=None):
                     update_book_summary(conn, book_id, summary)
                     if categories:
                         save_book_categories(conn, book_id, categories)
-                    logger.info("✅ Resumen y categorías generadas exitosamente.")
+                    logger.info("✅ Resumen y categorías generadas exitosamente mediante Groq.")
                 else:
                     logger.warning(f"❌ Falló la generación del resumen final para '{title}' tras agotar reintentos.")
-            else:
-                logger.warning(f"⚠️ No fue posible extraer un fragmento limpio de texto para '{title}'.")
                 
             # 4. Controlar limites de velocidad estándar entre libros
             logger.info("Esperando 5 segundos por cortesía antes del siguiente libro...")

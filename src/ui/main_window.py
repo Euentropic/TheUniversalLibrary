@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         # Configuración inicial de la ventana
         self.setWindowTitle("The Universal Library - Dashboard")
-        self.resize(1000, 600)
+        self.setMinimumSize(1100, 750)
         self.setAcceptDrops(True)
         
         # Aplicamos el tema oscuro global
@@ -64,6 +64,13 @@ class MainWindow(QMainWindow):
         # Inicializar UI y cargar datos
         self.init_ui()
         self.load_data()
+        
+        # Activar barra de estado nativa
+        self.statusBar().showMessage("Listo.", 5000)
+
+    def show_toast(self, message: str):
+        """Muestra un aviso rápido en la barra de estado."""
+        self.statusBar().showMessage(message, 5000)
 
     def apply_dark_theme(self):
         """Aplica un QSS (Qt Style Sheet) de estilo oscuro moderno premium."""
@@ -186,7 +193,9 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(right_panel)
         
         # Tarea 1: Proporción del Splitter 30/70
-        self.splitter.setSizes([300, 700])
+        self.splitter.setSizes([330, 770])
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 7)
         
         # --- Componentes del Panel Derecho ---
         
@@ -242,13 +251,17 @@ class MainWindow(QMainWindow):
         self.summary_text.setReadOnly(True)
         self.summary_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.summary_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.summary_text.setMinimumHeight(150)
+        self.summary_text.setMinimumHeight(250)
         # Padding interno asignado en duro si la QSS base requiere ayuda
         self.summary_text.setStyleSheet("padding: 12px; font-size: 11pt; line-height: 1.5;")
         right_layout.addWidget(self.summary_text)
 
+        # Botonera en layout horizontal
+        buttons_layout = QHBoxLayout()
+        right_layout.addLayout(buttons_layout)
+
         # Botón del Bibliotecario (Esqueleto Chat)
-        self.chat_button = QPushButton("✨ Preguntar a Gemini sobre este libro")
+        self.chat_button = QPushButton("✨ IA Gemini")
         self.chat_button.setStyleSheet("""
             QPushButton {
                 background-color: #5c2d91;
@@ -268,10 +281,10 @@ class MainWindow(QMainWindow):
         """)
         self.chat_button.setEnabled(False)
         self.chat_button.clicked.connect(self.open_ai_chat)
-        right_layout.addWidget(self.chat_button)
+        buttons_layout.addWidget(self.chat_button)
 
         # Botón de Edición
-        self.edit_button = QPushButton("✏️ Editar Metadatos")
+        self.edit_button = QPushButton("✏️ Editar")
         self.edit_button.setStyleSheet("""
             QPushButton {
                 background-color: #0e639c;
@@ -291,10 +304,13 @@ class MainWindow(QMainWindow):
         """)
         self.edit_button.setEnabled(False)
         self.edit_button.clicked.connect(self.open_edit_metadata)
-        right_layout.addWidget(self.edit_button)
+        buttons_layout.addWidget(self.edit_button)
+        
+        # Espaciador para separar Borrar
+        buttons_layout.addStretch()
 
         # Botón de Borrado
-        self.delete_button = QPushButton("🗑️ Borrar Libro de la Biblioteca")
+        self.delete_button = QPushButton("🗑️ Borrar")
         self.delete_button.setStyleSheet("""
             QPushButton {
                 background-color: #a51d2d;
@@ -314,7 +330,7 @@ class MainWindow(QMainWindow):
         """)
         self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_selected_book)
-        right_layout.addWidget(self.delete_button)
+        buttons_layout.addWidget(self.delete_button)
 
     def load_data(self):
         """Lee los libros de la base de datos y poblamos la lista del panel izquierdo."""
@@ -448,21 +464,59 @@ class MainWindow(QMainWindow):
         target_dir = PROJECT_ROOT / "data" / "ebooks_test"
         target_dir.mkdir(parents=True, exist_ok=True)
         
+        has_new_files = False
+        
         for url in urls:
             path = Path(url.toLocalFile())
             if path.is_file():
+                ext = path.suffix.lower()
+                final_name = path.name
+
+                if ext == '.zip':
+                    reply = QMessageBox.question(
+                        self, "Control de Aduanas (ZIP)",
+                        f"""Hemos detectado el archivo ZIP '{path.name}'.
+¿Deseas procesarlo como un cómic (CBZ)?""",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        final_name = path.with_suffix('.cbz').name
+                    else:
+                        continue  # Ignorar
+                
+                elif ext == '.pdf':
+                    msg_box = QMessageBox(self)
+                    msg_box.setWindowTitle("Control de Aduanas (PDF)")
+                    msg_box.setText(f"""El archivo '{path.name}' es un PDF.
+
+¿Deseas procesarlo como un Libro (extraer texto) o como un Cómic (solo título)?""")
+                    btn_libro = msg_box.addButton("📖 Como Libro", QMessageBox.ButtonRole.ActionRole)
+                    btn_comic = msg_box.addButton("🦸‍♂️ Como Cómic", QMessageBox.ButtonRole.ActionRole)
+                    btn_cancel = msg_box.addButton("❌ Cancelar", QMessageBox.ButtonRole.RejectRole)
+                    msg_box.exec()
+                    
+                    clicked_button = msg_box.clickedButton()
+                    if clicked_button == btn_cancel:
+                        continue
+                    elif clicked_button == btn_comic:
+                        final_name = path.with_suffix('.pdf_comic').name
+
                 try:
-                    shutil.copy(path, target_dir)
+                    target_file = target_dir / final_name
+                    shutil.copy(str(path), str(target_file))
+                    has_new_files = True
                 except Exception as e:
                     print(f"Error copiando archivo {path}: {e}")
                     
-        self.setWindowTitle("Procesando libros, por favor espera...")
-        
-        # Iniciar worker en segundo plano
-        self.worker = IngestionWorker(target_dir)
-        self.worker.progress.connect(lambda msg: self.setWindowTitle(f"Procesando: {msg}"))
-        self.worker.finished.connect(self.on_worker_finished)
-        self.worker.start()
+        if has_new_files:
+            self.setWindowTitle("Procesando libros, por favor espera...")
+            
+            # Iniciar worker en segundo plano
+            self.worker = IngestionWorker(target_dir)
+            self.worker.progress.connect(lambda msg: self.setWindowTitle(f"Procesando: {msg}"))
+            self.worker.finished.connect(self.on_worker_finished)
+            self.worker.start()
 
     def on_worker_finished(self):
         self.setWindowTitle("The Universal Library - Dashboard")

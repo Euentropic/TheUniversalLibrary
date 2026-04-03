@@ -1,0 +1,7 @@
+PyQt6
+google-genai
+groq
+PyMuPDF
+EbookLib
+python-dotenv
+beautifulsoup4
