@@ -28,11 +28,12 @@ from src.core.ai_service import run_summary_pipeline
 from src.core.saga_orchestrator import run_saga_analysis_pipeline
 from src.ui.chat_window import GeminiChatWindow
 from src.ui.edit_metadata_dialog import EditMetadataDialog
+from src.ui.settings_dialog import SettingsDialog
 from PyQt6.QtWidgets import QDialog
 
 class IngestionWorker(QThread):
     progress = pyqtSignal(str)
-    finished = pyqtSignal()
+    finished = pyqtSignal(int, int)
     
     def __init__(self, target_dir):
         super().__init__()
@@ -40,7 +41,7 @@ class IngestionWorker(QThread):
         
     def run(self):
         self.progress.emit("Ingestando archivos locales...")
-        book_ids = process_directory(str(self.target_dir))
+        book_ids, warnings = process_directory(str(self.target_dir))
         
         self.progress.emit("Generando resúmenes con IA...")
         run_summary_pipeline(book_ids)
@@ -48,7 +49,7 @@ class IngestionWorker(QThread):
         self.progress.emit("Analizando sagas y universos...")
         run_saga_analysis_pipeline(book_ids)
         
-        self.finished.emit()
+        self.finished.emit(len(book_ids), len(warnings))
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -260,8 +261,26 @@ class MainWindow(QMainWindow):
         buttons_layout = QHBoxLayout()
         right_layout.addLayout(buttons_layout)
 
+        # Botón de Ajustes
+        self.settings_button = QPushButton("⚙️ Ajustes")
+        self.settings_button.setStyleSheet("""
+            QPushButton {
+                background-color: #333333;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #444444;
+            }
+        """)
+        self.settings_button.clicked.connect(self.open_settings)
+        buttons_layout.addWidget(self.settings_button)
+
         # Botón del Bibliotecario (Esqueleto Chat)
-        self.chat_button = QPushButton("✨ IA Gemini")
+        self.chat_button = QPushButton("✨ Consultar IA")
         self.chat_button.setStyleSheet("""
             QPushButton {
                 background-color: #5c2d91;
@@ -310,7 +329,8 @@ class MainWindow(QMainWindow):
         buttons_layout.addStretch()
 
         # Botón de Borrado
-        self.delete_button = QPushButton("🗑️ Borrar")
+        self.delete_button = QPushButton("🗑️")
+        self.delete_button.setFixedWidth(40)
         self.delete_button.setStyleSheet("""
             QPushButton {
                 background-color: #a51d2d;
@@ -518,9 +538,22 @@ class MainWindow(QMainWindow):
             self.worker.finished.connect(self.on_worker_finished)
             self.worker.start()
 
-    def on_worker_finished(self):
+    def on_worker_finished(self, success_count, warnings_count):
         self.setWindowTitle("The Universal Library - Dashboard")
         self.load_data()
+        
+        self.show_toast(f"✅ Ingesta de {success_count} libros completada con éxito.")
+        
+        if warnings_count > 0:
+            QMessageBox.warning(
+                self,
+                "Libro Duplicado",
+                "Este libro está duplicado. Si quiere procesarlo de nuevo, bórrelo y arrástrelo otra vez a la aplicación.",
+                QMessageBox.StandardButton.Ok
+            )
+
+    def open_settings(self):
+        SettingsDialog(self).exec()
 
     def open_ai_chat(self):
         selected_items = self.books_list.selectedItems()

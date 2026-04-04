@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from google import genai
 from google.genai import types
+from PyQt6.QtCore import QSettings
 
 from src.db.database_manager import get_connection, DB_PATH
 
@@ -31,9 +32,9 @@ def get_saga_metadata(book_title: str, author: str) -> dict:
     Analiza si un libro pertenece a una saga o universo utilizando la API de Gemini.
     Devuelve un diccionario estructurado en JSON.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = QSettings("UniversalLibrary", "Config").value("api_key", "")
     if not api_key:
-        logger.error("No se encontró la variable de entorno GEMINI_API_KEY.")
+        logger.warning("No se encontró la API Key en QSettings. Modo Vanilla activado para sagas.")
         return {}
 
     # Instanciar el cliente usando el SDK oficial de Google GenAI

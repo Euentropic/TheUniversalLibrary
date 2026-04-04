@@ -12,6 +12,7 @@ import random
 import logging
 import json
 from pathlib import Path
+from PyQt6.QtCore import QSettings
 
 # Añadimos la raíz del proyecto al sys.path para poder importar src desde cualquier parte
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -61,12 +62,14 @@ except Exception as e:
 
 def generate_comic_metadata_with_gemini(title: str) -> str:
     """Llama a Gemini para obtener metadata de un cómic solo con el título."""
-    if not gemini_client:
-        return ""
+    api_key = QSettings("UniversalLibrary", "Config").value("api_key", "")
+    if not api_key:
+        return json.dumps({"summary": "Modo Básico: API Key necesaria para cómics.", "categories": ["Sin clasificar"]})
     
+    gemini_client_local = genai.Client(api_key=api_key)
     prompt = f"Eres un experto en cómics. Identifica este cómic por su título: '{title}'. Devuelve ÚNICAMENTE un JSON con 'summary' (resumen de 4 líneas) y 'categories' (lista de 2 a 4 géneros). No incluyas nada fuera del JSON."
     try:
-        response = gemini_client.models.generate_content(
+        response = gemini_client_local.models.generate_content(
             model="gemini-2.5-pro",
             contents=prompt,
         )
@@ -192,6 +195,11 @@ def run_summary_pipeline(book_ids=None):
                             break # Si es otro error, no reintentamos
                             
                 if summary:
+                    api_key = QSettings("UniversalLibrary", "Config").value("api_key", "")
+                    if not api_key:
+                        categories = ["Sin clasificar"]
+                        logger.info("Modo Básico: API Key no configurada. Categorías omitidas.")
+                        
                     # 3. Guardar Base de Datos
                     update_book_summary(conn, book_id, summary)
                     if categories:

@@ -177,7 +177,7 @@ def process_directory(directory_path: str | Path) -> list:
     """
     Escanea un directorio buscando archivos .epub, extrae sus metadatos e
     inserta los registros en la base de datos de manera transaccional.
-    Devuelve la lista de los IDs de los libros insertados/procesados.
+    Devuelve una tupla con (lista de los IDs de los libros insertados, lista de warnings de duplicados).
     """
     directory = Path(directory_path)
     if not directory.exists() or not directory.is_dir():
@@ -196,6 +196,7 @@ def process_directory(directory_path: str | Path) -> list:
     success_count = 0
     error_count = 0
     inserted_book_ids = []
+    duplicate_warnings = []
     
     for file_path in all_files:
         logger.info(f"Procesando: {file_path.name}")
@@ -230,6 +231,7 @@ def process_directory(directory_path: str | Path) -> list:
             cursor.execute("SELECT id FROM Books WHERE title = ?", (title,))
             if cursor.fetchone():
                 logger.warning(f"El libro '{title}' ya existe. Ignorando archivo.")
+                duplicate_warnings.append(str(file_path))
                 try:
                     os.remove(str(file_path))
                 except OSError as e:
@@ -291,7 +293,7 @@ def process_directory(directory_path: str | Path) -> list:
             conn.close()
             
     logger.info(f"Resumen de Ingestión: {success_count} procesados exitosamente, {error_count} errores.")
-    return inserted_book_ids
+    return inserted_book_ids, duplicate_warnings
 
 if __name__ == "__main__":
     # Ejemplo de uso buscando una carpeta temporal o argumento
@@ -306,4 +308,5 @@ if __name__ == "__main__":
             target_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Carpeta creada para pruebas: {target_dir}")
             
-    process_directory(target_dir)
+    inserted_ids, duplicados = process_directory(target_dir)
+    print(f"Insertados: {len(inserted_ids)}, Duplicados: {len(duplicados)}")
