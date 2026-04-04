@@ -309,6 +309,7 @@ def get_all_books_details(conn: sqlite3.Connection):
             SELECT 
                 b.id, 
                 b.title, 
+                b.file_path,
                 COALESCE(GROUP_CONCAT(DISTINCT a.name), 'Desconocido') AS author_name,
                 COALESCE(GROUP_CONCAT(DISTINCT p.name), 'Desconocido') AS publisher_name,
                 b.cover_path, 

@@ -29,6 +29,7 @@ from src.core.saga_orchestrator import run_saga_analysis_pipeline
 from src.ui.chat_window import GeminiChatWindow
 from src.ui.edit_metadata_dialog import EditMetadataDialog
 from src.ui.settings_dialog import SettingsDialog
+from src.ui.reader_window import ReaderWindow
 from PyQt6.QtWidgets import QDialog
 
 class IngestionWorker(QThread):
@@ -279,6 +280,29 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         buttons_layout.addWidget(self.settings_button)
 
+        # Botones Principales (IA, Lectura, Edición)
+        self.read_button = QPushButton("📖 Leer")
+        self.read_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0e639c;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1177bb;
+            }
+            QPushButton:disabled {
+                background-color: #2d2d30;
+                color: #888888;
+            }
+        """)
+        self.read_button.setEnabled(False)
+        self.read_button.clicked.connect(self.open_reader)
+        buttons_layout.addWidget(self.read_button)
+
         # Botón del Bibliotecario (Esqueleto Chat)
         self.chat_button = QPushButton("✨ Consultar IA")
         self.chat_button.setStyleSheet("""
@@ -392,7 +416,8 @@ class MainWindow(QMainWindow):
         # Recuperamos la data inyectada previamente
         book = item.data(Qt.ItemDataRole.UserRole)
         
-        # Habilitar el botón de chat y borrar
+        # Habilitar los botones de acciones al seleccionar un libro
+        self.read_button.setEnabled(True)
         self.chat_button.setEnabled(True)
         self.delete_button.setEnabled(True)
         self.edit_button.setEnabled(True)
@@ -555,6 +580,21 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         SettingsDialog(self).exec()
 
+    def open_reader(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        book = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        file_path = book.get('file_path')
+        
+        if file_path and file_path.lower().endswith('.pdf'):
+            self.reader = ReaderWindow()
+            self.reader.load_document(file_path)
+            self.reader.show()
+        else:
+            self.show_toast("Formato aún no soportado en el visor interno (se requiere .pdf)")
+
     def open_ai_chat(self):
         selected_items = self.books_list.selectedItems()
         if not selected_items:
@@ -621,6 +661,7 @@ class MainWindow(QMainWindow):
                 self.categories_label.setText("")
                 self.summary_text.setPlainText("")
                 self.cover_label.clear()
+                self.read_button.setEnabled(False)
                 self.chat_button.setEnabled(False)
                 self.delete_button.setEnabled(False)
                 self.edit_button.setEnabled(False)
