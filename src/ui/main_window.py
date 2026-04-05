@@ -16,7 +16,7 @@ def remove_accents(input_str):
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QLabel, QTextEdit, QListWidgetItem, QSplitter,
-    QLineEdit, QPushButton, QSizePolicy, QMessageBox, QComboBox
+    QLineEdit, QPushButton, QSizePolicy, QMessageBox, QComboBox, QAbstractItemView, QFileDialog, QProgressDialog
 )
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -32,17 +32,40 @@ from src.ui.settings_dialog import SettingsDialog
 from src.ui.reader_window import ReaderWindow
 from PyQt6.QtWidgets import QDialog
 
+from src.core.converter_engine import ConverterEngine
+
+class ConversionWorker(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool)
+    
+    def __init__(self, books_info):
+        super().__init__()
+        self.books_info = books_info
+        
+    def run(self):
+        converter = ConverterEngine()
+        total = len(self.books_info)
+        for i, b in enumerate(self.books_info):
+            self.progress.emit(f"Convirtiendo a KEPUB ({i+1}/{total}): {b['title']}")
+            try:
+                converter.convert_to_kepub(b['path'])
+            except Exception as e:
+                self.progress.emit(f"Error en {b['title']}: {str(e)[:40]}...")
+                import logging
+                logging.getLogger(__name__).error(f"Error conversion KEPUB {b['path']}: {e}")
+        self.finished.emit(True)
+
 class IngestionWorker(QThread):
     progress = pyqtSignal(str)
     finished = pyqtSignal(int, int)
     
-    def __init__(self, target_dir):
+    def __init__(self, files_list):
         super().__init__()
-        self.target_dir = target_dir
+        self.files_list = files_list
         
     def run(self):
         self.progress.emit("Ingestando archivos locales...")
-        book_ids, warnings = process_directory(str(self.target_dir))
+        book_ids, warnings = process_directory(self.files_list)
         
         self.progress.emit("Generando resúmenes con IA...")
         run_summary_pipeline(book_ids)
@@ -58,6 +81,7 @@ class MainWindow(QMainWindow):
         # Configuración inicial de la ventana
         self.setWindowTitle("The Universal Library - Dashboard")
         self.setMinimumSize(1100, 750)
+        self.resize(1200, 800)
         self.setAcceptDrops(True)
         
         # Aplicamos el tema oscuro global
@@ -139,6 +163,7 @@ class MainWindow(QMainWindow):
         
         # 2. Panel Izquierdo: Buscador y Lista
         left_panel = QWidget()
+        left_panel.setMinimumWidth(260)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -173,10 +198,26 @@ class MainWindow(QMainWindow):
         self.category_filter.currentTextChanged.connect(self.filter_books)
         search_layout.addWidget(self.category_filter)
         
+        self.format_filter = QComboBox()
+        self.format_filter.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #3e3e42;
+                border-radius: 4px;
+                padding: 6px;
+                background-color: #252526;
+                color: #d4d4d4;
+                font-size: 11pt;
+            }
+        """)
+        self.format_filter.addItems(['Todos los formatos', 'Solo EPUBs', 'Solo PDFs', 'Solo Cómics (CBZ/CBR)'])
+        self.format_filter.currentTextChanged.connect(self.filter_books)
+        search_layout.addWidget(self.format_filter)
+
         left_layout.addLayout(search_layout)
         
         self.books_list = QListWidget()
         self.books_list.setStyleSheet("font-size: 11pt;")
+        self.books_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         
         # Tarea 2: Mejora de la lista (elipse de textos largos)
         self.books_list.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -326,6 +367,58 @@ class MainWindow(QMainWindow):
         self.chat_button.clicked.connect(self.open_ai_chat)
         buttons_layout.addWidget(self.chat_button)
 
+        # Botones Especiales Epub / Export
+        export_layout = QVBoxLayout()
+        buttons_layout.addLayout(export_layout)
+
+        # Botón de Conversión
+        self.convert_button = QPushButton("🔄 Convertir a KEPUB")
+        self.convert_button.setStyleSheet("""
+            QPushButton {
+                background-color: #217346;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #278853;
+            }
+            QPushButton:disabled {
+                background-color: #17422a;
+                color: #888888;
+            }
+        """)
+        self.convert_button.setEnabled(False)
+        self.convert_button.hide()
+        self.convert_button.clicked.connect(self.handle_conversion)
+        export_layout.addWidget(self.convert_button)
+
+        # Botón de Exportar
+        self.export_zip_button = QPushButton("📦 Exportar para KOBO")
+        self.export_zip_button.setStyleSheet("""
+            QPushButton {
+                background-color: #b0620c;
+                color: #ffffff;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 11pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d17b1f;
+            }
+            QPushButton:disabled {
+                background-color: #5c3407;
+                color: #888888;
+            }
+        """)
+        self.export_zip_button.setEnabled(False)
+        self.export_zip_button.hide()
+        self.export_zip_button.clicked.connect(self.handle_export_to_zip)
+        export_layout.addWidget(self.export_zip_button)
+
         # Botón de Edición
         self.edit_button = QPushButton("✏️ Editar")
         self.edit_button.setStyleSheet("""
@@ -412,15 +505,31 @@ class MainWindow(QMainWindow):
         if not selected_items:
             return
             
-        item = selected_items[0]
+        item = selected_items[-1] # Mostrar info del último cliqueado en multiselección
         # Recuperamos la data inyectada previamente
         book = item.data(Qt.ItemDataRole.UserRole)
         
-        # Habilitar los botones de acciones al seleccionar un libro
-        self.read_button.setEnabled(True)
-        self.chat_button.setEnabled(True)
+        # Habilitar los botones base
+        self.read_button.setEnabled(len(selected_items) == 1)
+        self.chat_button.setEnabled(len(selected_items) == 1)
         self.delete_button.setEnabled(True)
-        self.edit_button.setEnabled(True)
+        self.edit_button.setEnabled(len(selected_items) == 1)
+        
+        all_epubs = all(i.data(Qt.ItemDataRole.UserRole).get('file_path', '').lower().endswith('.epub') for i in selected_items)
+        if all_epubs and len(selected_items) > 0:
+            self.convert_button.show()
+            self.convert_button.setEnabled(True)
+            self.export_zip_button.show()
+            
+            # Verificar si hay kepubs disponibles para habilitar la exportación
+            all_paths = [i.data(Qt.ItemDataRole.UserRole).get('file_path', '') for i in selected_items]
+            has_kepubs = any(Path(p).with_suffix('.kepub.epub').exists() for p in all_paths if p)
+            self.export_zip_button.setEnabled(has_kepubs)
+        else:
+            self.convert_button.hide()
+            self.convert_button.setEnabled(False)
+            self.export_zip_button.hide()
+            self.export_zip_button.setEnabled(False)
         
         # 1. Actualizar Textos
         self.title_label.setText(book.get('title', 'Sin título disponible'))
@@ -472,6 +581,7 @@ class MainWindow(QMainWindow):
     def filter_books(self, text=None):
         query = remove_accents(self.search_bar.text()).strip()
         selected_category = self.category_filter.currentText()
+        selected_format = self.format_filter.currentText()
         
         for i in range(self.books_list.count()):
             item = self.books_list.item(i)
@@ -481,6 +591,7 @@ class MainWindow(QMainWindow):
                 author = remove_accents(file_data.get('author_name', ''))
                 saga = remove_accents(file_data.get('saga_name', ''))
                 universe = remove_accents(file_data.get('universe_name', ''))
+                file_path = file_data.get('file_path', '').lower()
                 
                 text_match = not query or (query in title or query in author or query in saga or query in universe)
                 
@@ -492,7 +603,15 @@ class MainWindow(QMainWindow):
                     else:
                         cat_match = selected_category in book_cats
                         
-                if text_match and cat_match:
+                format_match = True
+                if selected_format == 'Solo EPUBs':
+                    format_match = file_path.endswith('.epub')
+                elif selected_format == 'Solo PDFs':
+                    format_match = file_path.endswith('.pdf')
+                elif selected_format == 'Solo Cómics (CBZ/CBR)':
+                    format_match = file_path.endswith('.cbz') or file_path.endswith('.cbr')
+
+                if text_match and cat_match and format_match:
                     item.setHidden(False)
                 else:
                     item.setHidden(True)
@@ -506,10 +625,8 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event):
         urls = event.mimeData().urls()
         
-        target_dir = PROJECT_ROOT / "data" / "ebooks_test"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        
-        has_new_files = False
+        # 1. Elimina uso de ebooks_test, se envía directamente al trabajador como archivos externos
+        new_files = []
         
         for url in urls:
             path = Path(url.toLocalFile())
@@ -547,23 +664,31 @@ class MainWindow(QMainWindow):
                     elif clicked_button == btn_comic:
                         final_name = path.with_suffix('.pdf_comic').name
 
-                try:
-                    target_file = target_dir / final_name
-                    shutil.copy(str(path), str(target_file))
-                    has_new_files = True
-                except Exception as e:
-                    print(f"Error copiando archivo {path}: {e}")
+                # Pasar tupla con path real y final_name propuesto al worker
+                new_files.append((path, final_name))
                     
-        if has_new_files:
+        if new_files:
             self.setWindowTitle("Procesando libros, por favor espera...")
             
-            # Iniciar worker en segundo plano
-            self.worker = IngestionWorker(target_dir)
-            self.worker.progress.connect(lambda msg: self.setWindowTitle(f"Procesando: {msg}"))
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            
+            self.progress_dialog = QProgressDialog("Iniciando ingestión...", None, 0, 0, self)
+            self.progress_dialog.setWindowTitle("Sistema Ocupado")
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            self.progress_dialog.setCancelButton(None)
+            self.progress_dialog.show()
+            
+            # Iniciar worker en segundo plano pasándole la lista de archivos
+            self.worker = IngestionWorker(new_files)
+            self.worker.progress.connect(self.progress_dialog.setLabelText)
             self.worker.finished.connect(self.on_worker_finished)
             self.worker.start()
 
     def on_worker_finished(self, success_count, warnings_count):
+        QApplication.restoreOverrideCursor()
+        if hasattr(self, 'progress_dialog'):
+            self.progress_dialog.close()
+            
         self.setWindowTitle("The Universal Library - Dashboard")
         self.load_data()
         
@@ -620,6 +745,69 @@ class MainWindow(QMainWindow):
         self.chat_win = GeminiChatWindow(title, author, summary, self)
         self.chat_win.show()
 
+    def handle_conversion(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        books_info = []
+        for item in selected_items:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            path = data.get('file_path')
+            title = data.get('title', Path(path).name if path else '')
+            if path and path.lower().endswith('.epub'):
+                books_info.append({'path': path, 'title': title})
+                
+        if not books_info:
+            return
+            
+        self.convert_button.setEnabled(False)
+        self.export_zip_button.setEnabled(False)
+        
+        self.conv_worker = ConversionWorker(books_info)
+        self.conv_worker.progress.connect(self.show_toast)
+        self.conv_worker.finished.connect(lambda: self.on_conversion_finished(len(books_info)))
+        self.conv_worker.start()
+
+    def on_conversion_finished(self, size):
+        self.show_toast(f"✅ Se convirtieron {size} libros a formato KEPUB con éxito.")
+        self.on_book_selected() # Refresh button states
+
+    def handle_export_to_zip(self):
+        selected_items = self.books_list.selectedItems()
+        if not selected_items:
+            return
+            
+        kepub_info = []
+        for item in selected_items:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            path = data.get('file_path')
+            title = data.get('title', 'Libro')
+            if path and path.lower().endswith('.epub'):
+                kepub_cand = Path(path).with_suffix('.kepub.epub')
+                if kepub_cand.exists():
+                    clean_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+                    kepub_info.append((kepub_cand, f"{clean_title}.kepub.epub"))
+                    
+        if not kepub_info:
+            self.show_toast("Ninguno de los libros seleccionados ha sido convertido a KEPUB todavía.")
+            return
+            
+        suggested_name = "Exportacion_Kobo.zip"
+        if len(kepub_info) == 1:
+            suggested_name = kepub_info[0][1].replace('.kepub.epub', '_Kobo.zip')
+            
+        save_path, _ = QFileDialog.getSaveFileName(self, "Exportar KEPUBs", suggested_name, "ZIP Files (*.zip)")
+        if save_path:
+            import zipfile
+            try:
+                with zipfile.ZipFile(save_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for kp_path, kp_name in kepub_info:
+                        zipf.write(kp_path, kp_name)
+                self.show_toast(f"✅ {len(kepub_info)} libros exportados a {Path(save_path).name}.")
+            except Exception as e:
+                self.show_toast(f"❌ Error al exportar: {e}")
+
     def open_edit_metadata(self):
         selected_items = self.books_list.selectedItems()
         if not selected_items:
@@ -645,13 +833,15 @@ class MainWindow(QMainWindow):
         if not selected_items:
             return
             
-        book = selected_items[0].data(Qt.ItemDataRole.UserRole)
-        book_id = book.get('id')
-        title = book.get('title', 'Desconocido')
-        
+        if len(selected_items) == 1:
+            title = selected_items[0].data(Qt.ItemDataRole.UserRole).get('title', 'Desconocido')
+            msg = f"¿Estás seguro de que deseas eliminar '{title}'?"
+        else:
+            msg = f"¿Estás seguro de que deseas eliminar {len(selected_items)} libros seleccionados?"
+            
         reply = QMessageBox.question(
             self, 'Confirmar borrado', 
-            f"¿Estás seguro de que deseas eliminar '{title}'?\\nDeberás volver a arrastrarlo para procesarlo.",
+            f"{msg}\\nDeberás volver a arrastrarlos para procesarlos.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
             QMessageBox.StandardButton.No
         )
@@ -659,11 +849,13 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             conn = get_connection(DB_PATH)
             if conn:
-                delete_book(conn, book_id)
+                for item in selected_items:
+                    book_id = item.data(Qt.ItemDataRole.UserRole).get('id')
+                    delete_book(conn, book_id)
                 conn.close()
                 
                 # Mensaje temporal en el título
-                self.setWindowTitle(f"Libro eliminado: {title}")
+                self.setWindowTitle(f"Eliminados {len(selected_items)} libros.")
                 
                 # Limpiar panel derecho
                 self.title_label.setText("")
@@ -674,6 +866,10 @@ class MainWindow(QMainWindow):
                 self.cover_label.clear()
                 self.read_button.setEnabled(False)
                 self.chat_button.setEnabled(False)
+                self.convert_button.setEnabled(False)
+                self.convert_button.hide()
+                self.export_zip_button.setEnabled(False)
+                self.export_zip_button.hide()
                 self.delete_button.setEnabled(False)
                 self.edit_button.setEnabled(False)
                 

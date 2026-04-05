@@ -23,12 +23,13 @@ import fitz
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-# Directorios de datos
-PROCESADOS_DIR = PROJECT_ROOT / "data" / "Procesados"
-PROCESADOS_DIR.mkdir(parents=True, exist_ok=True)
+# Directorios de datos definitivos
+LIBRARY_DIR = PROJECT_ROOT / "data" / "library"
+BOOKS_DIR = LIBRARY_DIR / "books"
+BOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Directorio de portadas
-COVERS_DIR = PROJECT_ROOT / "data" / "covers"
+COVERS_DIR = LIBRARY_DIR / "covers"
 COVERS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Importamos las funciones del database manager
@@ -173,87 +174,80 @@ def extract_pdf_metadata(file_path: Path):
     
     return title, author, text
 
-def process_directory(directory_path: str | Path) -> list:
+def process_directory(paths_or_directory) -> tuple:
     """
-    Escanea un directorio buscando archivos .epub, extrae sus metadatos e
-    inserta los registros en la base de datos de manera transaccional.
+    Recibe una lista de archivos nuevos enviados por dropEvent o un directorio al que escanear.
     Devuelve una tupla con (lista de los IDs de los libros insertados, lista de warnings de duplicados).
     """
-    directory = Path(directory_path)
-    if not directory.exists() or not directory.is_dir():
-        logger.error(f"El directorio especificado no es válido: {directory}")
-        return
-
-    epub_files = list(directory.rglob('*.epub'))
-    pdf_files = list(directory.rglob('*.pdf'))
-    cbz_files = list(directory.rglob('*.cbz'))
-    cbr_files = list(directory.rglob('*.cbr'))
-    pdf_comic_files = list(directory.rglob('*.pdf_comic'))
+    all_files = []
     
-    all_files = epub_files + pdf_files + cbz_files + cbr_files + pdf_comic_files
-    logger.info(f"Encontrados {len(all_files)} archivos ({len(epub_files)} epub, {len(pdf_files)} pdf, {len(cbz_files)+len(cbr_files)} cbz/cbr, {len(pdf_comic_files)} pdf_comic) en {directory}")
-
+    if isinstance(paths_or_directory, list):
+        # Flujo directo desde Drag&Drop
+        all_files = paths_or_directory
+    else:
+        directory = Path(paths_or_directory)
+        if directory.exists() and directory.is_dir():
+             for p in directory.rglob('*'):
+                 if p.suffix.lower() in ['.epub', '.pdf', '.cbz', '.cbr', '.pdf_comic']:
+                     all_files.append((p, p.name))
+                     
     success_count = 0
     error_count = 0
     inserted_book_ids = []
     duplicate_warnings = []
     
-    for file_path in all_files:
-        logger.info(f"Procesando: {file_path.name}")
+    for real_path, virtual_name in all_files:
+        logger.info(f"Procesando: {virtual_name}")
         
-        file_ext = file_path.suffix.lower()
-        if file_ext == '.epub':
-            title, creator, publisher, book = extract_epub_metadata(file_path)
-            format_str = "epub"
-        elif file_ext == '.pdf':
-            title, creator, text = extract_pdf_metadata(file_path)
-            publisher = "Desconocido"
-            book = None
-            format_str = "pdf"
-        elif file_ext in ['.cbz', '.cbr', '.pdf_comic']:
-            title, creator, text = extract_comic_metadata(file_path)
-            publisher = "Desconocido"
-            book = None
-            format_str = file_ext.strip('.')
-        else:
-            continue
-        
-        # Conectar a la base de datos para insertar
-        conn = get_connection(DB_PATH)
-        if not conn:
-            logger.error("No se pudo obtener conexión para insertar.")
-            error_count += 1
-            continue
-            
+        conn = None
         try:
-            # 1. Bloqueo Absoluto de Duplicados
+            file_path = Path(real_path) # Archivo original en el OS
+            file_ext = Path(virtual_name).suffix.lower()
+            if file_ext == '.epub':
+                title, creator, publisher, book = extract_epub_metadata(file_path)
+                format_str = "epub"
+            elif file_ext == '.pdf':
+                title, creator, text = extract_pdf_metadata(file_path)
+                publisher = "Desconocido"
+                book = None
+                format_str = "pdf"
+            elif file_ext in ['.cbz', '.cbr', '.pdf_comic']:
+                title, creator, text = extract_comic_metadata(Path(virtual_name))
+                publisher = "Desconocido"
+                book = None
+                format_str = file_ext.strip('.')
+            else:
+                continue
+            
+            # Conectar a la base de datos para insertar
+            conn = get_connection(DB_PATH)
+            if not conn:
+                logger.error("No se pudo obtener conexión para insertar.")
+                error_count += 1
+                continue
+                
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM Books WHERE title = ?", (title,))
             if cursor.fetchone():
                 logger.warning(f"El libro '{title}' ya existe. Ignorando archivo.")
                 duplicate_warnings.append(str(file_path))
-                try:
-                    os.remove(str(file_path))
-                except OSError as e:
-                    logger.error(f"Error borrando archivo duplicado: {e}")
                 continue
                 
             # Extraer portada (ahora solo si el libro es nuevo)
             cover_path = extract_cover(book, title) if book else None
             
-            # 2. Cálculo de Rutas
+            # 2. Cálculo de Rutas a Destino Definitivo
             if file_ext == '.pdf_comic':
-                destination_path = PROCESADOS_DIR / file_path.with_suffix('.pdf').name
+                destination_path = BOOKS_DIR / Path(virtual_name).with_suffix('.pdf').name
             else:
-                destination_path = PROCESADOS_DIR / file_path.name
+                destination_path = BOOKS_DIR / virtual_name
             
-            # 3. Movimiento Físico
+            # 3. Flujo Directo de Copiado Definitivo (Sin destruir origen)
             try:
-                shutil.move(str(file_path), str(destination_path))
-            except shutil.Error:
-                # Si falla porque ya existía el archivo con el mismo nombre en destino
-                shutil.copy(str(file_path), str(destination_path))
-                os.remove(str(file_path))
+                if str(file_path.absolute()) != str(destination_path.absolute()):
+                    shutil.copy2(str(file_path), str(destination_path))
+            except shutil.SameFileError:
+                pass
                 
             # 4. Inserción Atómica en BD
             book_id = insert_book(conn, title, str(destination_path), format_str, cover_path)
@@ -281,16 +275,21 @@ def process_directory(directory_path: str | Path) -> list:
             
         except sqlite3.Error as e:
             # Revertir cambios en caso de error en base de datos
-            conn.rollback()
+            if conn:
+                conn.rollback()
             error_count += 1
             logger.error(f"Error de DB en transacción para {file_path.name}: {e}")
+            print(f"Error procesando {file_path.name}: {e}")
         except Exception as e:
             # Revertir en caso de otros errores no capturados
-            conn.rollback()
+            if conn:
+                conn.rollback()
             error_count += 1
             logger.error(f"Error general en transacción para {file_path.name}: {e}")
+            print(f"Error procesando {file_path.name}: {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
             
     logger.info(f"Resumen de Ingestión: {success_count} procesados exitosamente, {error_count} errores.")
     return inserted_book_ids, duplicate_warnings

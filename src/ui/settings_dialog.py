@@ -22,7 +22,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.api_key_input)
         
         settings = QSettings("UniversalLibrary", "Config")
-        current_api_key = settings.value("api_key", "")
+        current_api_key = settings.value("gemini_api_key", "")
         if current_api_key:
              self.api_key_input.setText(current_api_key)
              
@@ -41,7 +41,7 @@ class SettingsDialog(QDialog):
         
     def save_settings(self):
         settings = QSettings("UniversalLibrary", "Config")
-        settings.setValue("api_key", self.api_key_input.text().strip())
+        settings.setValue("gemini_api_key", self.api_key_input.text().strip())
         self.accept()
         
     def apply_dark_theme(self):

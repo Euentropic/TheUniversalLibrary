@@ -68,7 +68,7 @@ def generate_comic_metadata_with_gemini(title: str) -> str:
     """Llama a Gemini para obtener metadata de un cómic solo con el título."""
     api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
     if not api_key:
-        return json.dumps({"summary": "Modo Básico: API Key necesaria para cómics (Estrategia BYOK no configurada).", "categories": ["Sin clasificar"]})
+        return json.dumps({"summary": "Modo Básico: API Key necesaria para cómics (Estrategia BYOK no configurada).", "categories": ["Sin clasificar"]}, ensure_ascii=False)
     
     gemini_client_local = genai.Client(api_key=api_key)
     prompt = f"Eres un experto en cómics. Identifica este cómic por su título: '{title}'. Devuelve ÚNICAMENTE un JSON con 'summary' (resumen de 4 líneas) y 'categories' (lista de 2 a 4 géneros). No incluyas nada fuera del JSON."
@@ -199,7 +199,7 @@ def run_summary_pipeline(book_ids=None):
                             break # Si es otro error, no reintentamos
                             
                 if summary:
-                    api_key = QSettings("UniversalLibrary", "Config").value("api_key", "")
+                    api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
                     if not api_key:
                         categories = ["Sin clasificar"]
                         logger.info("Modo Básico: API Key no configurada. Categorías omitidas.")

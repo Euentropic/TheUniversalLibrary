@@ -26,16 +26,51 @@ DB_PATH = PROJECT_ROOT / DB_NAME
 def get_connection(db_path: Path = DB_PATH) -> Optional[sqlite3.Connection]:
     """
     Crea y retorna una conexión a la base de datos SQLite.
-    Habilita el soporte para llaves foráneas.
+    Habilita el soporte para llaves foráneas. Reconstrulle si no hay datos.
     """
     try:
-        # connect() acepta tanto strings como objetos Path en Python modernos
+        is_new = not db_path.exists() or db_path.stat().st_size == 0
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA encoding = 'UTF-8';")
+        
+        if is_new:
+            # Reconstrulle tablas principales instantáneamente si la bdd fue borrada
+            _rebuild_core_schema(conn)
+            
         return conn
     except sqlite3.Error as e:
         logger.error(f"Error al conectar con la base de datos: {e}")
         return None
+
+def _rebuild_core_schema(conn: sqlite3.Connection):
+    """Auto-reconstruye las tablas base para evitar fallos si el archivo DB es borrado manualmente."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Books (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, file_path TEXT UNIQUE NOT NULL, format TEXT NOT NULL, added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, summary TEXT, cover_path TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Authors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE COLLATE NOCASE)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Publishers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Collections (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Book_Authors (book_id INTEGER, author_id INTEGER, PRIMARY KEY (book_id, author_id), FOREIGN KEY (book_id) REFERENCES Books (id) ON DELETE CASCADE, FOREIGN KEY (author_id) REFERENCES Authors (id) ON DELETE CASCADE)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Book_Categories (book_id INTEGER, category_id INTEGER, PRIMARY KEY (book_id, category_id), FOREIGN KEY (book_id) REFERENCES Books (id) ON DELETE CASCADE, FOREIGN KEY (category_id) REFERENCES Categories (id) ON DELETE CASCADE)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Book_Publishers (book_id INTEGER, publisher_id INTEGER, PRIMARY KEY (book_id, publisher_id), FOREIGN KEY (book_id) REFERENCES Books (id) ON DELETE CASCADE, FOREIGN KEY (publisher_id) REFERENCES Publishers (id) ON DELETE CASCADE)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS Book_Collections (book_id INTEGER, collection_id INTEGER, PRIMARY KEY (book_id, collection_id), FOREIGN KEY (book_id) REFERENCES Books (id) ON DELETE CASCADE, FOREIGN KEY (collection_id) REFERENCES Collections (id) ON DELETE CASCADE)''')
+        
+        # Ecosistema de Sagas
+        cursor.execute('''CREATE TABLE IF NOT EXISTS universes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, description TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS sagas (id INTEGER PRIMARY KEY AUTOINCREMENT, universe_id INTEGER, name TEXT NOT NULL, total_books INTEGER, FOREIGN KEY(universe_id) REFERENCES universes(id))''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, saga_id INTEGER, title TEXT NOT NULL, author TEXT NOT NULL, reading_order INTEGER, chronological_order INTEGER, spanish_published BOOLEAN DEFAULT 0, FOREIGN KEY(saga_id) REFERENCES sagas(id))''')
+        
+        # Migración adicional del catalog_entry_id generada por sagas (la ignorará si falla)
+        try:
+            cursor.execute("ALTER TABLE Books ADD COLUMN catalog_entry_id INTEGER NULL REFERENCES catalog_entries(id)")
+        except:
+            pass
+            
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error auto-reconstruyendo el esquema: {e}")
 
 def initialize_db(db_path: Path = DB_PATH) -> None:
     """

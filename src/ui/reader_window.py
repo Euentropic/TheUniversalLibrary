@@ -134,8 +134,8 @@ class ReaderWindow(QMainWindow):
                 self.epub = EpubEngine(file_path)
                 self.setWindowTitle(f"Visor: {os.path.basename(file_path)}")
                 self.stacked_widget.setCurrentIndex(1)
-                self.btn_fit_width.setVisible(False)
-                self.btn_fit_page.setVisible(False)
+                self.btn_fit_width.setVisible(True)
+                self.btn_fit_page.setVisible(True)
             elif ext in ['.cbz', '.cbr']:
                 self.comic = ComicEngine(file_path)
                 self.setWindowTitle(f"Visor: {os.path.basename(file_path)}")
@@ -268,6 +268,12 @@ class ReaderWindow(QMainWindow):
                 self.show_page()
 
     def fit_to_width(self):
+        if self.epub:
+            self.current_scale = 1.0
+            self.web_view.setZoomFactor(self.current_scale)
+            self.zoom_label.setText("100%")
+            return
+            
         if not self.doc and not self.comic:
             return
         
@@ -289,6 +295,12 @@ class ReaderWindow(QMainWindow):
             self.show_page()
 
     def fit_to_page(self):
+        if self.epub:
+            self.current_scale = 1.0
+            self.web_view.setZoomFactor(self.current_scale)
+            self.zoom_label.setText("100%")
+            return
+            
         if not self.doc and not self.comic:
             return
             
