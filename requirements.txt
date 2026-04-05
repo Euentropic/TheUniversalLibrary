@@ -1,7 +1,9 @@
 PyQt6
+PyQt6-WebEngine
 google-genai
 groq
 PyMuPDF
 EbookLib
 python-dotenv
 beautifulsoup4
+rarfile

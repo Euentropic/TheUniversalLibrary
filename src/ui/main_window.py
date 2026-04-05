@@ -588,14 +588,25 @@ class MainWindow(QMainWindow):
         book = selected_items[0].data(Qt.ItemDataRole.UserRole)
         file_path = book.get('file_path')
         
-        if file_path and file_path.lower().endswith('.pdf'):
+        if file_path and file_path.lower().endswith(('.pdf', '.cbz', '.cbr', '.epub')):
             self.reader = ReaderWindow()
-            self.reader.load_document(file_path)
-            self.reader.show()
+            if self.reader.load_document(file_path):
+                self.reader.show()
         else:
-            self.show_toast("Formato aún no soportado en el visor interno (se requiere .pdf)")
+            self.show_toast("Formato aún no soportado en el visor interno (se requiere .pdf, .cbz, .cbr o .epub)")
 
     def open_ai_chat(self):
+        from PyQt6.QtCore import QSettings
+        
+        api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key")
+        if not api_key:
+            QMessageBox.warning(
+                self, 
+                "Modo Vanilla Activo", 
+                "Para consultar a la IA directamente, necesitas configurar tu propia API Key de Google Gemini en la ventana de Ajustes (Estrategia BYOK)."
+            )
+            return
+
         selected_items = self.books_list.selectedItems()
         if not selected_items:
             return

@@ -53,18 +53,22 @@ except Exception as e:
     logger.error("No se pudo inicializar el cliente de Groq. ¿Está configurado GROQ_API_KEY?")
     client = None
 
-# Instanciar cliente de Gemini
-try:
-    gemini_client = genai.Client() # Usa GEMINI_API_KEY del .env
-except Exception as e:
-    logger.error(f"No se pudo inicializar Gemini: {e}")
+# Instanciar cliente de Gemini estrictamente bajo estrategia BYOK
+api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
+if api_key:
+    try:
+        gemini_client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"No se pudo inicializar Gemini: {e}")
+        gemini_client = None
+else:
     gemini_client = None
 
 def generate_comic_metadata_with_gemini(title: str) -> str:
     """Llama a Gemini para obtener metadata de un cómic solo con el título."""
-    api_key = QSettings("UniversalLibrary", "Config").value("api_key", "")
+    api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
     if not api_key:
-        return json.dumps({"summary": "Modo Básico: API Key necesaria para cómics.", "categories": ["Sin clasificar"]})
+        return json.dumps({"summary": "Modo Básico: API Key necesaria para cómics (Estrategia BYOK no configurada).", "categories": ["Sin clasificar"]})
     
     gemini_client_local = genai.Client(api_key=api_key)
     prompt = f"Eres un experto en cómics. Identifica este cómic por su título: '{title}'. Devuelve ÚNICAMENTE un JSON con 'summary' (resumen de 4 líneas) y 'categories' (lista de 2 a 4 géneros). No incluyas nada fuera del JSON."
