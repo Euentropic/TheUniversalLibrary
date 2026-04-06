@@ -19,7 +19,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 # Importamos dependencias externas
-from dotenv import load_dotenv
 from groq import Groq
 from google import genai
 
@@ -37,32 +36,9 @@ from src.core.text_extractor import extract_sample_text
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno (incluye GROQ_API_KEY)
-# Verifica la ruta .env que debe encontrarse en PROJECT_ROOT
-env_path = PROJECT_ROOT / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
-    logger.info("Variables de entorno cargadas.")
-else:
-    logger.warning("No se encontró el archivo .env, usando variables del sistema directamente.")
-
-# Instanciar el cliente
-try:
-    client = Groq() # Automáticamente usa os.environ.get("GROQ_API_KEY")
-except Exception as e:
-    logger.error("No se pudo inicializar el cliente de Groq. ¿Está configurado GROQ_API_KEY?")
-    client = None
-
-# Instanciar cliente de Gemini estrictamente bajo estrategia BYOK
-api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
-if api_key:
-    try:
-        gemini_client = genai.Client(api_key=api_key)
-    except Exception as e:
-        logger.error(f"No se pudo inicializar Gemini: {e}")
-        gemini_client = None
-else:
-    gemini_client = None
+# Nota: Las instanciaciones globales de los clientes se han eliminado para soportar
+# la carga dinámica dinámica con QSettings (BYOK) en cada función.
+gemini_client = None
 
 def generate_comic_metadata_with_gemini(title: str) -> str:
     """Llama a Gemini para obtener metadata de un cómic solo con el título."""
@@ -86,7 +62,15 @@ def generate_summary(book_title: str, sample_text: str) -> str:
     """
     Llama a la API de Groq para generar un resumen corto utilizando Llama 3.
     """
-    if not client:
+    groq_api_key = QSettings("UniversalLibrary", "Config").value("groq_api_key", "")
+    if not groq_api_key:
+        logger.warning("Modo Básico: API Key de Groq no configurada. Saltando resúmenes automáticos.")
+        return ""
+        
+    try:
+        client = Groq(api_key=groq_api_key)
+    except Exception as e:
+        logger.error(f"Error inicializando Groq: {e}")
         return ""
         
     prompt = f"Título del libro: {book_title}\n\nFragmento del libro:\n{sample_text}"

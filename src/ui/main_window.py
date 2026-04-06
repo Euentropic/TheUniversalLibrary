@@ -30,6 +30,7 @@ from src.ui.chat_window import GeminiChatWindow
 from src.ui.edit_metadata_dialog import EditMetadataDialog
 from src.ui.settings_dialog import SettingsDialog
 from src.ui.reader_window import ReaderWindow
+from src.ui.semantic_search_dialog import SemanticSearchDialog
 from PyQt6.QtWidgets import QDialog
 
 from src.core.converter_engine import ConverterEngine
@@ -214,6 +215,24 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self.format_filter)
 
         left_layout.addLayout(search_layout)
+        
+        self.btn_search = QPushButton("🔍 Búsqueda Semántica Asistida")
+        self.btn_search.setStyleSheet("""
+            QPushButton {
+                background-color: #5c2d91;
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 4px;
+                margin-top: 5px;
+                margin-bottom: 5px;
+            }
+            QPushButton:hover {
+                background-color: #6d3aab;
+            }
+        """)
+        self.btn_search.clicked.connect(self.open_semantic_search)
+        left_layout.addWidget(self.btn_search)
         
         self.books_list = QListWidget()
         self.books_list.setStyleSheet("font-size: 11pt;")
@@ -704,6 +723,24 @@ class MainWindow(QMainWindow):
 
     def open_settings(self):
         SettingsDialog(self).exec()
+
+    def open_semantic_search(self):
+        dialog = SemanticSearchDialog(self)
+        from PyQt6.QtWidgets import QDialog
+        from PyQt6.QtCore import Qt
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            book_id = getattr(dialog, 'selected_book_id', None)
+            if book_id is not None:
+                for i in range(self.books_list.count()):
+                    item = self.books_list.item(i)
+                    book_data = item.data(Qt.ItemDataRole.UserRole)
+                    if book_data and book_data.get('id') == book_id:
+                        # Asegurarse de que el ítem sea visible si estaba filtrado
+                        item.setHidden(False)
+                        self.books_list.clearSelection()
+                        item.setSelected(True)
+                        self.books_list.scrollToItem(item)
+                        break
 
     def open_reader(self):
         selected_items = self.books_list.selectedItems()

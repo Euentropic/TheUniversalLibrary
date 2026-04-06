@@ -376,3 +376,52 @@ def get_all_books_details(conn: sqlite3.Connection):
 if __name__ == "__main__":
     # Si se ejecuta este script directamente, inicializa la base de datos
     initialize_db()
+
+def reindex_fts(db_path: Path = DB_PATH) -> None:
+    """
+    Crea, limpia y reindexa la tabla virtual FTS5 para búsquedas semánticas.
+    """
+    logger.info("Iniciando reindexación de FTS5...")
+    conn = get_connection(db_path)
+    if not conn:
+        logger.error("No se pudo conectar a la base de datos para reindexar.")
+        return
+        
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Crear la tabla virtual FTS5
+        cursor.execute("DROP TABLE IF EXISTS books_fts;")
+        cursor.execute("CREATE VIRTUAL TABLE books_fts USING fts5(book_id UNINDEXED, title, author, categories, summary, tokenize='unicode61');")
+        
+        # 2. Borrar contenido actual
+        cursor.execute("DELETE FROM books_fts;")
+        
+        # 3. Repoblar la tabla insertando los datos de la tabla principal
+        try:
+            cursor.execute("INSERT INTO books_fts (book_id, title, author, categories, summary) SELECT id, title, author, categories, summary FROM books WHERE summary IS NOT NULL;")
+        except sqlite3.OperationalError as op_err:
+            if "no such column" in str(op_err):
+                # Si la tabla Books no tiene la columna autor o categorias, usar JOIN con las tablas vinculadas
+                cursor.execute('''
+                    INSERT INTO books_fts (book_id, title, author, categories, summary)
+                    SELECT 
+                        b.id, 
+                        b.title, 
+                        COALESCE((SELECT GROUP_CONCAT(a.name, ', ') FROM Authors a JOIN Book_Authors ba ON a.id = ba.author_id WHERE ba.book_id = b.id), 'Desconocido') AS author,
+                        (SELECT GROUP_CONCAT(c.name, ', ') FROM Categories c JOIN Book_Categories bc ON c.id = bc.category_id WHERE bc.book_id = b.id) AS categories,
+                        b.summary 
+                    FROM Books b 
+                    WHERE b.summary IS NOT NULL;
+                ''')
+            else:
+                raise op_err
+                
+        conn.commit()
+        logger.info("Tabla books_fts reindexada con éxito.")
+        
+    except sqlite3.Error as e:
+        logger.error(f"Error al reindexar books_fts: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
