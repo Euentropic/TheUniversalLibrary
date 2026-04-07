@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, 
     QScrollArea, QLabel, QPushButton, QToolBar, QMessageBox, QStackedWidget
 )
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QTransform
 from PyQt6.QtCore import Qt
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
@@ -22,6 +22,7 @@ class ReaderWindow(QMainWindow):
         self.epub = None
         self.current_page = 0
         self.current_scale = 1.0  # Lógica de Zoom Dinámico
+        self.current_rotation = 0 # Lógica de Rotación
         
         # Widget Central
         central_widget = QWidget()
@@ -72,6 +73,10 @@ class ReaderWindow(QMainWindow):
         self.btn_fit_page = QPushButton("🔍 Ajustar a Página")
         self.btn_fit_page.clicked.connect(self.fit_to_page)
         self.navigation_toolbar.addWidget(self.btn_fit_page)
+        
+        self.btn_rotate = QPushButton("🔄 Girar")
+        self.btn_rotate.clicked.connect(self.rotate_page)
+        self.navigation_toolbar.addWidget(self.btn_rotate)
         
         # Stacked Widget para soportar múltiples motores de renderizado
         self.stacked_widget = QStackedWidget()
@@ -125,6 +130,7 @@ class ReaderWindow(QMainWindow):
                 self.comic.close()
                 
             self.current_page = 0
+            self.current_rotation = 0
             self.doc = None
             self.comic = None
             self.epub = None
@@ -225,6 +231,9 @@ class ReaderWindow(QMainWindow):
                 total_pages = len(self.comic)
             
             if pixmap:
+                if self.current_rotation != 0:
+                    transform = QTransform().rotate(self.current_rotation)
+                    pixmap = pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
                 self.page_label.setPixmap(pixmap)
             
             self.page_counter.setText(f"Página {self.current_page + 1} de {total_pages}")
@@ -293,6 +302,10 @@ class ReaderWindow(QMainWindow):
         if new_scale > 0:
             self.current_scale = new_scale
             self.show_page()
+
+    def rotate_page(self):
+        self.current_rotation = (self.current_rotation + 90) % 360
+        self.show_page()
 
     def fit_to_page(self):
         if self.epub:

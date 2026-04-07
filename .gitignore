@@ -1,11 +1,19 @@
-# Ignorar variables de entorno (¡CRÍTICO para no filtrar tu API Key!)
+# Variables de entorno (¡CRÍTICO para no filtrar tu API Key!)
 .env
 
-# Ignorar la base de datos local y las portadas (pesan mucho para Git)
-library.db
-data/covers/
-data/ebooks_test/
+# Entornos virtuales
+.venv/
+venv/
 
-# Ignorar archivos caché de Python
+# Bases de datos y archivos multimedia pesados
+*.db
+data/
+
+# Archivos de empaquetado (¡EL CULPABLE DEL ATASCO!)
+build/
+dist/
+*.spec
+
+# Archivos caché de Python
 __pycache__/
 *.pyc

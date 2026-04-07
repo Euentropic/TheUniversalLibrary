@@ -3,7 +3,8 @@ import re
 import logging
 import json
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from groq import Groq
 
 # Configuración básica de logging
@@ -105,14 +106,15 @@ def execute_vectorial_search(user_query: str, gemini_api_key: str, db_path: str,
         return []
 
     try:
-        genai.configure(api_key=gemini_api_key)
+        client = genai.Client(api_key=gemini_api_key)
         
         # Vectorizar la consulta del usuario
-        query_vector = genai.embed_content(
-            model="models/gemini-embedding-001", 
-            content=user_query, 
-            task_type="retrieval_query"
-        )['embedding']
+        response = client.models.embed_content(
+            model="gemini-embedding-001", 
+            contents=user_query, 
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+        )
+        query_vector = response.embeddings[0].values
         
     except Exception as e:
         logger.error(f"Error al vectorizar la consulta con Gemini: {e}")

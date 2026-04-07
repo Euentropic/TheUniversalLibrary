@@ -5,11 +5,15 @@ Este módulo maneja la inicialización y las operaciones básicas de la base de 
 SQLite utilizada para almacenar los metadatos de los ebooks, autores, categorías, etc.
 """
 
+
 import sqlite3
 import logging
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PyQt6.QtCore import QSettings
+import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -17,14 +21,26 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Rutas del proyecto
-# __file__ es .../src/db/database_manager.py
-# parent 1: src/db
-# parent 2: src
-# parent 3: raíz del proyecto (donde estará library.db)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DB_NAME = "library.db"
-DB_PATH = PROJECT_ROOT / DB_NAME
+def get_project_root() -> Path:
+    """Devuelve la ruta raíz del proyecto, sea como script o empaquetado en .exe"""
+    if getattr(sys, 'frozen', False):
+        # Si es un ejecutable creado por PyInstaller
+        return Path(sys.executable).parent
+    else:
+        # Si se ejecuta como script (src/db/database_manager.py)
+        # Subimos 3 niveles: db -> src -> BOOK_MASTER
+        return Path(__file__).resolve().parent.parent.parent
+
+# --- RUTAS MAESTRAS DEL SISTEMA ---
+PROJECT_ROOT = get_project_root()
+DB_PATH = PROJECT_ROOT / "library.db"
+DATA_DIR = PROJECT_ROOT / "data"
+COVERS_DIR = DATA_DIR / "covers"
+BOOKS_DIR = DATA_DIR / "books"
+
+# Crear carpetas si no existen (previene crashes al arrancar de cero)
+COVERS_DIR.mkdir(parents=True, exist_ok=True)
+BOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_connection(db_path: Path = DB_PATH) -> Optional[sqlite3.Connection]:
     """
@@ -251,6 +267,11 @@ def insert_book(conn: sqlite3.Connection, title: str, file_path: str, format_str
     Si el file_path ya existe, devuelve el ID del libro existente.
     """
     try:
+        if file_path:
+            file_path = str(BOOKS_DIR / os.path.basename(file_path))
+        if cover_path:
+            cover_path = str(COVERS_DIR / os.path.basename(cover_path))
+            
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM Books WHERE file_path = ?", (file_path,))
         result = cursor.fetchone()
@@ -379,7 +400,22 @@ def get_all_books_details(conn: sqlite3.Connection):
         '''
         cursor.execute(query)
         columns = [col[0] for col in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        
+        results = []
+        for row in cursor.fetchall():
+            book_dict = dict(zip(columns, row))
+            
+            if book_dict.get('file_path'):
+                nombre_archivo = os.path.basename(book_dict['file_path'])
+                book_dict['file_path'] = str(BOOKS_DIR / nombre_archivo)
+                
+            if book_dict.get('cover_path'):
+                nombre_portada = os.path.basename(book_dict['cover_path'])
+                book_dict['cover_path'] = str(COVERS_DIR / nombre_portada)
+                
+            results.append(book_dict)
+            
+        return results
     except sqlite3.Error as e:
         logger.error(f"Error al obtener detalles de libros: {e}")
         return []
@@ -446,7 +482,7 @@ def generate_missing_embeddings(db_path: Path = DB_PATH) -> None:
         logger.info("No hay API key de Gemini. Se omite la generación de embeddings.")
         return
 
-    genai.configure(api_key=gemini_api_key)
+    client = genai.Client(api_key=gemini_api_key)
     conn = get_connection(db_path)
     if not conn:
         logger.error("Error: no se pudo conectar a SQLite para generar embeddings.")
@@ -500,12 +536,12 @@ def generate_missing_embeddings(db_path: Path = DB_PATH) -> None:
             texto_completo = f"{title} {author} {categories} {summary}"
 
             try:
-                result = genai.embed_content(
-                    model="models/gemini-embedding-001", 
-                    content=texto_completo, 
-                    task_type="retrieval_document"
+                result = client.models.embed_content(
+                    model="gemini-embedding-001", 
+                    contents=texto_completo, 
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
                 )
-                vector_json = json.dumps(result['embedding'])
+                vector_json = json.dumps(result.embeddings[0].values)
                 
                 cursor.execute("UPDATE Books SET embedding = ? WHERE id = ?", (vector_json, book_id))
             except Exception as e:

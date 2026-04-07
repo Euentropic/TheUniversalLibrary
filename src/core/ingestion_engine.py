@@ -23,15 +23,6 @@ import fitz
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-# Directorios de datos definitivos
-LIBRARY_DIR = PROJECT_ROOT / "data" / "library"
-BOOKS_DIR = LIBRARY_DIR / "books"
-BOOKS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Directorio de portadas
-COVERS_DIR = LIBRARY_DIR / "covers"
-COVERS_DIR.mkdir(parents=True, exist_ok=True)
-
 # Importamos las funciones del database manager
 from src.db.database_manager import (
     get_connection,
@@ -40,7 +31,9 @@ from src.db.database_manager import (
     get_or_create_publisher,
     link_book_author,
     link_book_publisher,
-    DB_PATH
+    DB_PATH,
+    BOOKS_DIR,
+    COVERS_DIR
 )
 
 # Configuración básica de logging
