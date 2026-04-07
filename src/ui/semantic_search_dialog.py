@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 
 # Importar la lógica y constantes del proyecto
-from src.core.search_engine import execute_semantic_search
+from src.core.search_engine import execute_semantic_search, execute_vectorial_search
 from src.db.database_manager import DB_PATH
 
 class SearchWorker(QThread):
@@ -17,15 +17,22 @@ class SearchWorker(QThread):
     results_ready = pyqtSignal(list)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, user_query: str, groq_api_key: str, db_path: str):
+    def __init__(self, user_query: str, groq_api_key: str, gemini_api_key: str, db_path: str):
         super().__init__()
         self.user_query = user_query
         self.groq_api_key = groq_api_key
+        self.gemini_api_key = gemini_api_key
         self.db_path = db_path
 
     def run(self):
         try:
-            results = execute_semantic_search(self.user_query, self.groq_api_key, self.db_path)
+            if self.gemini_api_key:
+                results = execute_vectorial_search(self.user_query, self.gemini_api_key, self.db_path)
+            elif self.groq_api_key:
+                results = execute_semantic_search(self.user_query, self.groq_api_key, self.db_path)
+            else:
+                results = []
+            
             # Emitiremos la lista (esté llena o vacía)
             self.results_ready.emit(results)
         except Exception as e:
@@ -90,17 +97,19 @@ class SemanticSearchDialog(QDialog):
         self.search_btn.setText("Analizando...")
         self.results_table.setRowCount(0)
         
-        # Recuperar API key
+        # Recuperar API keys
         groq_api_key = QSettings("UniversalLibrary", "Config").value("groq_api_key", "")
-        if not groq_api_key:
-            QMessageBox.warning(self, "API Key no encontrada", "No se ha configurado la API Key de Groq en los Ajustes.")
+        gemini_api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
+        
+        if not groq_api_key and not gemini_api_key:
+            QMessageBox.warning(self, "API Key no encontrada", "No se han configurado llaves para Groq ni Gemini en los Ajustes.")
             self._reset_button()
             return
             
         db_path_str = str(DB_PATH)
         
         # Instanciar y conectar el Worker
-        self.worker = SearchWorker(query_text, groq_api_key, db_path_str)
+        self.worker = SearchWorker(query_text, groq_api_key, gemini_api_key, db_path_str)
         self.worker.results_ready.connect(self.on_results_ready)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.start()

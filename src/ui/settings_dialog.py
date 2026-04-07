@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QMessageBox
 from PyQt6.QtCore import QSettings, Qt
-from src.db.database_manager import reindex_fts
+from src.db.database_manager import reindex_fts, generate_missing_embeddings
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -12,8 +12,8 @@ class SettingsDialog(QDialog):
         
         info_label = QLabel(
             "<p><b>Nivel 1 (Modo Básico):</b> Sin claves. Lectura rápida y conversión a Kobo.</p>"
-            "<p><b>Nivel 2 (Modo Inteligente):</b> Solo API Key de Groq (Gratis). Activa la generación de resúmenes y el Buscador Semántico avanzado.</p>"
-            "<p><b>Nivel 3 (Modo Pro):</b> Groq + Gemini. Desbloquea la agrupación automática por Sagas y Universos.</p>"
+            "<p><b>Nivel 2 (Modo Inteligente):</b> API Key de Groq (Gratis). Activa la generación automática de resúmenes.</p>"
+            "<p><b>Nivel 3 (Modo Pro):</b> Groq + Gemini. Desbloquea la agrupación automática por Sagas y Universos, y el Asistente IA para consultar dudas sobre un libro concreto.</p>"
         )
         info_label.setTextFormat(Qt.TextFormat.RichText)
         info_label.setWordWrap(True)
@@ -52,9 +52,9 @@ class SettingsDialog(QDialog):
              self.groq_api_key_input.setText(current_groq_key)
              
         # --- Botones inferiores ---
-        self.btn_reindex = QPushButton("🔄 Reindexar Motor de Búsqueda")
-        self.btn_reindex.clicked.connect(self.run_reindex)
-        layout.addWidget(self.btn_reindex)
+        # self.btn_reindex = QPushButton("🔄 Reindexar Motor de Búsqueda")
+        # self.btn_reindex.clicked.connect(self.run_reindex)
+        # layout.addWidget(self.btn_reindex)
         
         button_layout = QHBoxLayout()
         save_button = QPushButton("Guardar")
@@ -71,7 +71,8 @@ class SettingsDialog(QDialog):
         
     def run_reindex(self):
         reindex_fts()
-        QMessageBox.information(self, "Reindexación Completada", "El índice de búsqueda semántica ha sido actualizado correctamente con los libros actuales de tu biblioteca.")
+        generate_missing_embeddings()
+        QMessageBox.information(self, "Reindexación Completada", "El índice FTS5 y los vectores semánticos han sido actualizados correctamente con los libros de tu biblioteca.")
         
     def show_groq_help(self):
         msg = (

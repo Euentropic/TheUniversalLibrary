@@ -7,6 +7,9 @@ SQLite utilizada para almacenar los metadatos de los ebooks, autores, categoría
 
 import sqlite3
 import logging
+import json
+import google.generativeai as genai
+from PyQt6.QtCore import QSettings
 from pathlib import Path
 from typing import Optional
 
@@ -192,6 +195,14 @@ def initialize_db(db_path: Path = DB_PATH) -> None:
         try:
             cursor.execute("ALTER TABLE Books ADD COLUMN cover_path TEXT")
             logger.info("Migración: Columna 'cover_path' añadida a la tabla Books.")
+        except sqlite3.OperationalError:
+            # La columna probablemente ya existe
+            pass
+
+        # Migración: Añadir columna embedding a la tabla Books
+        try:
+            cursor.execute("ALTER TABLE Books ADD COLUMN embedding TEXT;")
+            logger.info("Migración: Columna 'embedding' añadida a la tabla Books.")
         except sqlite3.OperationalError:
             # La columna probablemente ya existe
             pass
@@ -422,6 +433,89 @@ def reindex_fts(db_path: Path = DB_PATH) -> None:
         
     except sqlite3.Error as e:
         logger.error(f"Error al reindexar books_fts: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def generate_missing_embeddings(db_path: Path = DB_PATH) -> None:
+    """Genera y almacena embeddings para los libros que aún no lo tienen."""
+    logger.info("Iniciando generación de embeddings faltantes...")
+    gemini_api_key = QSettings("UniversalLibrary", "Config").value("gemini_api_key", "")
+    
+    if not gemini_api_key:
+        logger.info("No hay API key de Gemini. Se omite la generación de embeddings.")
+        return
+
+    genai.configure(api_key=gemini_api_key)
+    conn = get_connection(db_path)
+    if not conn:
+        logger.error("Error: no se pudo conectar a SQLite para generar embeddings.")
+        return
+
+    try:
+        cursor = conn.cursor()
+        
+        # Garantizar que la columna embedding existe antes de operar
+        try:
+            cursor.execute("ALTER TABLE Books ADD COLUMN embedding TEXT;")
+            conn.commit()
+            logger.info("Migración Forzada: Columna 'embedding' añadida a la tabla Books.")
+        except sqlite3.OperationalError:
+            pass # La columna ya existe
+        
+        # Buscamos los libros elegibles que no tengan embedding,
+        # obteniendo autor y categorias de las tablas vinculadas si es necesario
+        query = '''
+            SELECT 
+                b.id, 
+                b.title, 
+                COALESCE((SELECT GROUP_CONCAT(a.name, ', ') FROM Authors a JOIN Book_Authors ba ON a.id = ba.author_id WHERE ba.book_id = b.id), 'Desconocido') AS author,
+                COALESCE((SELECT GROUP_CONCAT(c.name, ', ') FROM Categories c JOIN Book_Categories bc ON c.id = bc.category_id WHERE bc.book_id = b.id), '') AS categories,
+                b.summary 
+            FROM Books b 
+            WHERE b.summary IS NOT NULL AND b.embedding IS NULL;
+        '''
+        
+        try:
+            cursor.execute(query)
+            books_to_process = cursor.fetchall()
+        except sqlite3.OperationalError as op_err:
+            if "no such column: b.embedding" in str(op_err):
+                logger.warning("La columna embedding no existe todavía. Abortando generación.")
+                return
+            else:
+                raise op_err
+
+        if not books_to_process:
+            logger.info("No hay libros pendientes de generar embeddings.")
+            return
+
+        for row in books_to_process:
+            book_id = row[0]
+            title = row[1]
+            author = row[2]
+            categories = row[3]
+            summary = row[4]
+
+            texto_completo = f"{title} {author} {categories} {summary}"
+
+            try:
+                result = genai.embed_content(
+                    model="models/gemini-embedding-001", 
+                    content=texto_completo, 
+                    task_type="retrieval_document"
+                )
+                vector_json = json.dumps(result['embedding'])
+                
+                cursor.execute("UPDATE Books SET embedding = ? WHERE id = ?", (vector_json, book_id))
+            except Exception as e:
+                logger.error(f"Error al generar embedding para el libro ID {book_id}: {e}")
+
+        conn.commit()
+        logger.info(f"Se completó la generación de embeddings para {len(books_to_process)} libros.")
+
+    except sqlite3.Error as e:
+        logger.error(f"Error de base de datos en generate_missing_embeddings: {e}")
         conn.rollback()
     finally:
         conn.close()

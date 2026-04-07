@@ -1,6 +1,9 @@
 import sqlite3
 import re
 import logging
+import json
+import numpy as np
+import google.generativeai as genai
 from groq import Groq
 
 # Configuración básica de logging
@@ -87,3 +90,106 @@ def execute_semantic_search(user_query: str, groq_api_key: str, db_path: str) ->
             conn.close()
             
     return results
+
+def cosine_similarity(a, b):
+    """Calcula la similitud entre dos vectores."""
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def execute_vectorial_search(user_query: str, gemini_api_key: str, db_path: str, top_k=15) -> list:
+    """
+    Vectoriza la consulta del usuario mediante Gemini, 
+    y evalúa la similitud del coseno de este vector contra todos los embeddings de libros.
+    """
+    if not gemini_api_key:
+        logger.error("Se requiere la API key de Gemini para la búsqueda vectorial.")
+        return []
+
+    try:
+        genai.configure(api_key=gemini_api_key)
+        
+        # Vectorizar la consulta del usuario
+        query_vector = genai.embed_content(
+            model="models/gemini-embedding-001", 
+            content=user_query, 
+            task_type="retrieval_query"
+        )['embedding']
+        
+    except Exception as e:
+        logger.error(f"Error al vectorizar la consulta con Gemini: {e}")
+        return []
+
+    results = []
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Garantizar que la columna embedding existe antes de operar
+        try:
+            cursor.execute("ALTER TABLE Books ADD COLUMN embedding TEXT;")
+            conn.commit()
+            logger.info("Migración Forzada: Columna 'embedding' añadida a la tabla Books.")
+        except sqlite3.OperationalError:
+            pass # La columna ya existe
+            
+        # Extraer todos los libros con embedding válido
+        query = '''
+            SELECT 
+                b.id as book_id, 
+                b.title, 
+                COALESCE((SELECT GROUP_CONCAT(a.name, ', ') FROM Authors a JOIN Book_Authors ba ON a.id = ba.author_id WHERE ba.book_id = b.id), 'Desconocido') AS author,
+                COALESCE((SELECT GROUP_CONCAT(c.name, ', ') FROM Categories c JOIN Book_Categories bc ON c.id = bc.category_id WHERE bc.book_id = b.id), '') AS categories,
+                b.summary,
+                b.embedding
+            FROM Books b 
+            WHERE b.embedding IS NOT NULL AND b.summary IS NOT NULL
+        '''
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        
+        columns = [col[0] for col in cursor.description]
+        
+        scored_items = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            book_vector_str = row_dict['embedding']
+            if not book_vector_str:
+                continue
+            book_vector = json.loads(book_vector_str)
+            score = cosine_similarity(query_vector, book_vector)
+            scored_items.append((row_dict, score))
+            
+        if not scored_items:
+            return []
+            
+        # 1. Ordenar todos de mayor a menor
+        scored_items.sort(key=lambda x: x[1], reverse=True)
+        
+        # 2. Obtener la nota del mejor libro
+        top_score = scored_items[0][1]
+        logger.info(f"Top Score de la búsqueda: {top_score:.4f}")
+        
+        # 3. Filtrar dinámicamente: 
+        # Debe ser decente (> 0.50) y estar a menos de 0.07 puntos del mejor resultado
+        for row_dict, score in scored_items:
+            if score >= 0.50 and score >= (top_score - 0.07):
+                results.append({
+                    'book_id': row_dict['book_id'],
+                    'title': row_dict['title'],
+                    'author': row_dict['author'],
+                    'categories': row_dict['categories'],
+                    'summary': row_dict['summary'],
+                    'score': score
+                })
+                
+        return results[:top_k]
+        
+    except sqlite3.Error as e:
+        logger.error(f"Error de base de datos durante la búsqueda vectorial: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Error procesando la búsqueda vectorial: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()

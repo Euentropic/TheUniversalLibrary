@@ -216,23 +216,23 @@ class MainWindow(QMainWindow):
 
         left_layout.addLayout(search_layout)
         
-        self.btn_search = QPushButton("🔍 Búsqueda Semántica Asistida")
-        self.btn_search.setStyleSheet("""
-            QPushButton {
-                background-color: #5c2d91;
-                color: white;
-                font-weight: bold;
-                padding: 8px;
-                border-radius: 4px;
-                margin-top: 5px;
-                margin-bottom: 5px;
-            }
-            QPushButton:hover {
-                background-color: #6d3aab;
-            }
-        """)
-        self.btn_search.clicked.connect(self.open_semantic_search)
-        left_layout.addWidget(self.btn_search)
+        # self.btn_search = QPushButton("🔍 Búsqueda Semántica Asistida")
+        # self.btn_search.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #5c2d91;
+        #         color: white;
+        #         font-weight: bold;
+        #         padding: 8px;
+        #         border-radius: 4px;
+        #         margin-top: 5px;
+        #         margin-bottom: 5px;
+        #     }
+        #     QPushButton:hover {
+        #         background-color: #6d3aab;
+        #     }
+        # """)
+        # self.btn_search.clicked.connect(self.open_semantic_search)
+        # left_layout.addWidget(self.btn_search)
         
         self.books_list = QListWidget()
         self.books_list.setStyleSheet("font-size: 11pt;")
